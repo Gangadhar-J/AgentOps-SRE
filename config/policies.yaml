@@ -1,0 +1,121 @@
+# AgentOps Security Policies (v0.4.3)
+# Deterministic Least-Privilege Policy Rules for SRE Agent Actions
+
+policies:
+  # -------------------------------------------------------------
+  # 1. Read-Only Telemetry Policies (ALLOW for SRE Agent)
+  # -------------------------------------------------------------
+  - id: allow-k8s-read-pods
+    description: Allow SRE agent to inspect pod health in demo namespace
+    agent_ids:
+      - sre-agent-primary
+    action: k8s.read.pods
+    risk_level: LOW
+    decision: ALLOW
+    constraints:
+      namespaces:
+        - demo
+
+  - id: allow-k8s-read-events
+    description: Allow SRE agent to inspect cluster warning events in demo namespace
+    agent_ids:
+      - sre-agent-primary
+    action: k8s.read.events
+    risk_level: LOW
+    decision: ALLOW
+    constraints:
+      namespaces:
+        - demo
+
+  - id: allow-k8s-read-deployments
+    description: Allow SRE agent to inspect deployment status in demo namespace
+    agent_ids:
+      - sre-agent-primary
+    action: k8s.read.deployments
+    risk_level: LOW
+    decision: ALLOW
+    constraints:
+      namespaces:
+        - demo
+
+  - id: allow-prom-read-metrics
+    description: Allow SRE agent to query Prometheus metrics for demo namespace
+    agent_ids:
+      - sre-agent-primary
+    action: prom.read.metrics
+    risk_level: LOW
+    decision: ALLOW
+    constraints:
+      namespaces:
+        - demo
+
+  - id: allow-loki-read-logs
+    description: Allow SRE agent to search Loki application logs for demo namespace
+    agent_ids:
+      - sre-agent-primary
+    action: loki.read.logs
+    risk_level: LOW
+    decision: ALLOW
+    constraints:
+      namespaces:
+        - demo
+
+  # -------------------------------------------------------------
+  # 2. Remediation Proposals (REQUIRE_APPROVAL with Mandatory Evidence)
+  # -------------------------------------------------------------
+  - id: restart-deployment-requires-approval
+    description: Restarting a deployment requires human approval and valid evidence
+    agent_ids:
+      - sre-agent-primary
+    action: k8s.remediation.restart_deployment
+    risk_level: MEDIUM
+    decision: REQUIRE_APPROVAL
+    requires_evidence: true
+    constraints:
+      namespaces:
+        - demo
+      allowed_resources:
+        - demo-app
+
+  - id: scale-deployment-requires-approval
+    description: Scaling a deployment requires human approval and valid evidence
+    agent_ids:
+      - sre-agent-primary
+    action: k8s.remediation.scale_deployment
+    risk_level: HIGH
+    decision: REQUIRE_APPROVAL
+    requires_evidence: true
+    constraints:
+      namespaces:
+        - demo
+      max_replicas: 5
+
+  - id: rollback-deployment-requires-approval
+    description: Rolling back a deployment requires human approval and valid evidence
+    agent_ids:
+      - sre-agent-primary
+    action: k8s.remediation.rollback_deployment
+    risk_level: HIGH
+    decision: REQUIRE_APPROVAL
+    requires_evidence: true
+    constraints:
+      namespaces:
+        - demo
+
+  # -------------------------------------------------------------
+  # 3. Explicit Prohibitions (DENY overrides all)
+  # -------------------------------------------------------------
+  - id: deny-resource-deletion
+    description: Autonomous resource deletion is strictly prohibited across all environments
+    action: k8s.remediation.delete_resource
+    risk_level: CRITICAL
+    decision: DENY
+
+  - id: deny-production-namespace-actions
+    description: All remediation in production namespace is strictly denied
+    action: k8s.remediation.restart_deployment
+    risk_level: CRITICAL
+    decision: DENY
+    constraints:
+      namespaces:
+        - production
