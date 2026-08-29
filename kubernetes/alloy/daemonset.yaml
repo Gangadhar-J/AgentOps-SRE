@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  namespace: monitoring
+  labels:
+    app: alloy
+spec:
+  selector:
+    matchLabels:
+      app: alloy
+  template:
+    metadata:
+      labels:
+        app: alloy
+    spec:
+      serviceAccountName: alloy
+      containers:
+      - name: alloy
+        image: grafana/alloy:v1.19.2
+        args:
+        - "run"
+        - "--server.http.listen-addr=0.0.0.0:12345"
+        - "--storage.path=/var/lib/alloy/data"
+        - "/etc/alloy/config.alloy"
+        ports:
+        - containerPort: 12345
+          name: http-metrics
+        resources:
+          limits:
+            memory: "384Mi"
+            cpu: "200m"
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+        securityContext:
+          privileged: false
+          runAsUser: 0
+        volumeMounts:
+        - name: config
+          mountPath: /etc/alloy
+        - name: varlogpods
+          mountPath: /var/log/pods
+          readOnly: true
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: storage
+          mountPath: /var/lib/alloy/data
+      volumes:
+      - name: config
+        configMap:
+          name: alloy-config
+      - name: varlogpods
+        hostPath:
+          path: /var/log/pods
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: storage
+        emptyDir: {}
