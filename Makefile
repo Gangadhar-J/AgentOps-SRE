@@ -1,4 +1,4 @@
-.PHONY: all setup start stop status test test-infra demo clean preflight help
+.PHONY: all setup start stop status test test-infra test-scenarios test-all demo investigate clean preflight help
 
 SHELL := /bin/bash
 CLUSTER_NAME ?= agentops
@@ -6,16 +6,19 @@ CLUSTER_NAME ?= agentops
 all: help
 
 help:
-	@echo "AgentOps-SRE (v0.1) - Available Make Targets:"
-	@echo "  make setup        - Run preflight, spin up cluster, deploy observability stack & demo app"
-	@echo "  make start        - Start / ensure cluster and all workloads are running"
-	@echo "  make stop         - Teardown Kind cluster"
-	@echo "  make status       - Show status of cluster nodes, pods, and service URLs"
-	@echo "  make test         - Run local Python unit tests"
-	@echo "  make test-infra   - Run end-to-end infrastructure integration tests"
-	@echo "  make demo         - Run interactive incident simulation walkthrough"
-	@echo "  make preflight    - Verify local host environment dependencies"
-	@echo "  make clean        - Remove virtualenv and temporary files"
+	@echo "AgentOps-SRE (v0.2) - Available Make Targets:"
+	@echo "  make setup          - Run preflight, spin up cluster, deploy observability stack & demo app"
+	@echo "  make start          - Start / ensure cluster and all workloads are running"
+	@echo "  make stop           - Teardown Kind cluster"
+	@echo "  make status         - Show status of cluster nodes, pods, and service URLs"
+	@echo "  make test           - Run local Python unit tests (clients, models, security guards)"
+	@echo "  make test-infra     - Run end-to-end infrastructure integration tests"
+	@echo "  make test-scenarios - Run full agent incident investigation scenarios against live cluster"
+	@echo "  make test-all       - Run all test suites"
+	@echo "  make investigate    - Run interactive CLI investigation for demo-app"
+	@echo "  make demo           - Run incident reproduction demo"
+	@echo "  make preflight      - Verify local host environment dependencies"
+	@echo "  make clean          - Remove virtualenv and temporary caches"
 
 preflight:
 	@./scripts/preflight.sh
@@ -56,10 +59,18 @@ status:
 	@echo "================================================================"
 
 test:
-	@uv run pytest tests/test_demo_app.py -v
+	@uv run pytest tests/test_demo_app.py tests/unit/ -v
 
 test-infra:
 	@uv run pytest tests/test_infrastructure.py -v
+
+test-scenarios:
+	@uv run pytest tests/scenario/ -v
+
+test-all: test test-infra test-scenarios
+
+investigate:
+	@uv run python -m agentops.cli investigate --namespace demo --workload demo-app
 
 demo:
 	@echo "================================================================"
@@ -69,15 +80,15 @@ demo:
 	@./scripts/trigger-incident.sh high-error-rate
 	@sleep 4
 	@echo ""
-	@echo "2. Resetting to healthy state..."
+	@echo "2. Running AI SRE Investigation Agent..."
+	@$(MAKE) investigate
+	@sleep 2
+	@echo ""
+	@echo "3. Resetting to healthy state..."
 	@./scripts/trigger-incident.sh reset
 	@echo ""
-	@echo "Demo finished. You can run individual incidents via:"
-	@echo "  ./scripts/trigger-incident.sh crashloop"
-	@echo "  ./scripts/trigger-incident.sh high-error-rate"
-	@echo "  ./scripts/trigger-incident.sh resource-exhaustion"
-	@echo "  ./scripts/trigger-incident.sh reset"
+	@echo "Demo finished."
 
 clean:
-	@rm -rf .venv __pycache__ .pytest_cache
+	@rm -rf .venv __pycache__ .pytest_cache tests/**/__pycache__
 	@echo "Cleaned local virtual environment and caches."

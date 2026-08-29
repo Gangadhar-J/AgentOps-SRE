@@ -91,6 +91,7 @@ def _memory_exhaustion_worker():
         "Resource exhaustion failure mode active: beginning memory leak simulation",
         extra={"endpoint": "background-worker"},
     )
+    sys.stdout.flush()
     chunk_size = 20 * 1024 * 1024  # 20MB chunks
     allocated_total = 0
     while True:
@@ -106,17 +107,20 @@ def _memory_exhaustion_worker():
                 f"Memory allocation leak running: allocated {allocated_total / (1024 * 1024):.1f} MB",
                 extra={"endpoint": "background-worker"},
             )
+            sys.stdout.flush()
         except MemoryError:
             logger.error(
                 "Memory allocation failed: OOM condition reached",
                 extra={"endpoint": "background-worker", "error_type": "MemoryError"},
             )
+            sys.stdout.flush()
             break
         except Exception as e:
             logger.error(
                 f"Unexpected error in memory leak worker: {str(e)}",
                 extra={"endpoint": "background-worker"},
             )
+            sys.stdout.flush()
             break
 
 if FAILURE_MODE == "resource_exhaustion":
@@ -150,6 +154,7 @@ def record_metrics(response):
                 "duration_ms": round(duration * 1000, 2),
             },
         )
+        sys.stdout.flush()
     response.headers["X-Request-ID"] = g.request_id
     return response
 
@@ -199,10 +204,11 @@ def create_order():
                     "request_id": g.request_id,
                     "endpoint": "/orders",
                     "error_type": "FatalProcessCrash",
-                    "stack_trace": "Traceback (most recent call last):\n  File \"app.py\", line 180, in create_order\n    raise SystemExit('Fatal container panic')",
+                    "stack_trace": "Traceback (most recent call last):\n  File \"app.py\", line 185, in create_order\n    raise SystemExit('Fatal container panic')",
                 },
             )
-            # Kill the entire container process tree to trigger Kubernetes container restart / CrashLoopBackOff
+            sys.stdout.flush()
+            time.sleep(0.1)
             try:
                 os.kill(os.getppid(), signal.SIGKILL)
             except Exception:
@@ -223,9 +229,10 @@ def create_order():
                     "endpoint": "/orders",
                     "status_code": 500,
                     "error_type": "DatabaseConnectionTimeout",
-                    "stack_trace": "Traceback (most recent call last):\n  File \"app.py\", line 200, in create_order\n  ConnectionTimeoutError: Failed to acquire connection from pool [pool_size=10, active=10]",
+                    "stack_trace": "Traceback (most recent call last):\n  File \"app.py\", line 205, in create_order\n  ConnectionTimeoutError: Failed to acquire connection from pool [pool_size=10, active=10]",
                 },
             )
+            sys.stdout.flush()
             return jsonify({
                 "error": "InternalServerError",
                 "message": "Database connection timeout while committing transaction",
@@ -255,6 +262,7 @@ def create_order():
             "status_code": 201,
         },
     )
+    sys.stdout.flush()
     return jsonify(order), 201
 
 

@@ -31,12 +31,12 @@ case "$SCENARIO" in
         kubectl rollout restart deployment/demo-app -n demo
         kubectl rollout status deployment/demo-app -n demo --timeout=60s
 
-        echo -e "${BLUE}2. Generating workload to trigger the crash threshold...${NC}"
-        for i in {1..5}; do
+        echo -e "${BLUE}2. Generating workload to trigger the crash threshold on replicas...${NC}"
+        for i in {1..8}; do
             curl -s -X POST http://localhost:30080/orders \
                  -H "Content-Type: application/json" \
-                 -d "{\"item\": \"item-$i\", \"amount\": $i}" >/dev/null 2>&1 || true
-            sleep 0.5
+                 -d "{\"item\": \"crash-item-$i\", \"amount\": $i}" >/dev/null 2>&1 || true
+            sleep 0.2
         done
 
         echo -e "${YELLOW}3. Crash triggered! Observable telemetry signals:${NC}"
@@ -55,19 +55,19 @@ case "$SCENARIO" in
         echo -e "${BLUE}1. Patching demo-app with FAILURE_MODE=high_error_rate...${NC}"
         kubectl set env deployment/demo-app -n demo FAILURE_MODE=high_error_rate
         kubectl rollout restart deployment/demo-app -n demo
-        sleep 5
+        kubectl rollout status deployment/demo-app -n demo --timeout=60s
 
         echo -e "${BLUE}2. Generating synthetic order traffic...${NC}"
         for i in {1..10}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:30080/orders \
                           -H "Content-Type: application/json" \
-                          -d "{\"item\": \"order-batch-$i\", \"amount\": 1}")
+                          -d "{\"item\": \"order-batch-$i\", \"amount\": 1}" || echo "ERR")
             echo "   Order $i -> HTTP Status $STATUS"
             sleep 0.3
         done
 
         echo -e "${YELLOW}3. Traffic injected! Observable telemetry signals:${NC}"
-        echo -e "   • ${CYAN}Readiness Probe:${NC}  curl -s http://localhost:30080/ready (returns 503)"
+        echo -e "   • ${CYAN}Readiness Probe:${NC}  curl -s http://localhost:30080/ready"
         echo -e "   • ${CYAN}PromQL Metric:${NC}    sum(rate(http_requests_total{status=\"500\"}[1m])) / sum(rate(http_requests_total[1m]))"
         echo -e "   • ${CYAN}LogQL Query:${NC}      {namespace=\"demo\"} | json | error_type=\"DatabaseConnectionTimeout\""
         echo ""
@@ -81,7 +81,7 @@ case "$SCENARIO" in
         echo -e "${BLUE}1. Patching demo-app with FAILURE_MODE=resource_exhaustion...${NC}"
         kubectl set env deployment/demo-app -n demo FAILURE_MODE=resource_exhaustion
         kubectl rollout restart deployment/demo-app -n demo
-        sleep 5
+        kubectl rollout status deployment/demo-app -n demo --timeout=60s
 
         echo -e "${YELLOW}2. Memory allocation worker active. Pod will exceed 128Mi limit shortly.${NC}"
         echo -e "   • ${CYAN}Kubernetes State:${NC} kubectl get pods -n demo -w (watch for OOMKilled)"
@@ -97,8 +97,7 @@ case "$SCENARIO" in
         echo -e "${BLUE}======================================================${NC}"
         kubectl set env deployment/demo-app -n demo FAILURE_MODE=none
         kubectl rollout restart deployment/demo-app -n demo
-        echo -e "${BLUE}Waiting for healthy pods rollout...${NC}"
-        kubectl rollout status deployment/demo-app -n demo --timeout=90s
+        kubectl rollout status deployment/demo-app -n demo --timeout=60s
         echo -e "${GREEN}✓ Demo application successfully restored to healthy state!${NC}"
         ;;
 
