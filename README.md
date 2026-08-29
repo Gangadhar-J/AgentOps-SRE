@@ -4,49 +4,29 @@
 
 ---
 
-## Current Milestone: v0.2 (Basic AI SRE Agent)
+## Current Milestone: v0.3 (MCP Integration)
 
-Milestone **v0.2** introduces an AI-assisted SRE investigation system that collects telemetry across **Kubernetes**, **Prometheus**, and **Grafana Loki**, structures the multi-modal evidence into an immutable provenance model (`E001`, `E002`...), and synthesizes a structured Root Cause Analysis (RCA) JSON report.
+Milestone **v0.3** introduces the **Model Context Protocol (MCP)** as the standardized boundary between the AI SRE Agent and infrastructure investigation tools across Kubernetes, Prometheus, and Grafana Loki.
 
 ```
-                 Incident Alert / Investigation Request
-                                    │
-                                    ▼
-                          ┌──────────────────┐
-                          │     SREAgent     │  (Tracks execution duration,
-                          └─────────┬────────┘   queries, tokens, latency)
-                                    │
-                                    ▼
-                   ┌─────────────────────────────────┐
-                   │   Investigation Orchestrator    │
-                   └────────────────┬────────────────┘
-                                    │
-            ┌───────────────────────┼───────────────────────┐
-            │                       │                       │
-            ▼                       ▼                       ▼
-   ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-   │ Kubernetes API  │     │   Prometheus    │     │   Grafana Loki  │
-   │  Client (READ)  │     │  Client (READ)  │     │  Client (READ)  │
-   └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-            │                       │                       │
-            └───────────────────────┼───────────────────────┘
-                                    │
-                                    ▼
-                         ┌────────────────────┐
-                         │   Evidence Model   │  (FACT vs INFERENCE vs HYPOTHESIS)
-                         └──────────┬─────────┘
-                                    │
-                                    ▼
-                         ┌────────────────────┐
-                         │    LLM Provider    │  (Provider-agnostic interface:
-                         │   (RCA Generator)  │   Gemini, OpenAI, Mock/Heuristic)
-                         └──────────┬─────────┘
-                                    │
-                                    ▼
-                         ┌────────────────────┐
-                         │   Structured RCA   │  (Evidence-backed, confidence,
-                         │    (JSON Model)    │   recommendations, audit timeline)
-                         └────────────────────┘
+                     SRE Agent
+                        │
+                    MCP Client  (Discovers tools, invokes tool calls, tracks MCP metrics)
+                        │
+                  MCP / JSON-RPC (Standardized tool protocol)
+                        │
+                        ▼
+                    MCP Server  (Validates schemas, routes requests, read-only guards)
+                        │
+          ┌─────────────┼─────────────┐
+          │             │             │
+          ▼             ▼             ▼
+     Kubernetes     Prometheus      Loki
+        Tools          Tools        Tools
+          │             │             │
+          ▼             ▼             ▼
+      Kubernetes    Prometheus     Grafana
+         API           API          Loki
 ```
 
 ---
@@ -72,13 +52,13 @@ make status
 
 ### 3. Run Automated Tests
 ```bash
-# Run unit tests (models, clients, security boundaries)
+# Run unit tests (schemas, clients, models, security guards)
 make test
 
-# Run infrastructure integration tests against the live cluster
+# Run infrastructure & MCP pipeline integration tests
 make test-infra
 
-# Run end-to-end incident investigation scenarios against live cluster
+# Run end-to-end incident investigation scenarios via MCP against live cluster
 make test-scenarios
 
 # Run all test suites
@@ -87,18 +67,18 @@ make test-all
 
 ---
 
-## Investigating Incidents with the AI SRE Agent
+## Investigating Incidents with the AI SRE Agent (over MCP)
 
-You can trigger reproducible incidents and run the investigation agent via the CLI:
+You can trigger reproducible incidents and run the investigation agent through MCP:
 
 ### 1. High HTTP 500 Error Rate
 ```bash
 # Trigger incident
 ./scripts/trigger-incident.sh high-error-rate
 
-# Run AI investigation
+# Run AI investigation via MCP
 make investigate
-# Or via CLI:
+# Or directly via CLI:
 uv run python -m agentops.cli investigate --namespace demo --workload demo-app
 ```
 
@@ -114,7 +94,13 @@ make investigate
 make investigate
 ```
 
-### 4. Incident Recovery
+### 4. Standalone MCP Server
+```bash
+# Run standalone MCP Server (stdio JSON-RPC transport)
+uv run python -m agentops.cli mcp-server
+```
+
+### 5. Incident Recovery
 ```bash
 ./scripts/trigger-incident.sh reset
 ```
@@ -125,8 +111,10 @@ make investigate
 - [docs/decisions/ADR-001-kind-for-local-kubernetes.md](docs/decisions/ADR-001-kind-for-local-kubernetes.md): Kind for Local Kubernetes
 - [docs/decisions/ADR-002-alloy-over-promtail.md](docs/decisions/ADR-002-alloy-over-promtail.md): Grafana Alloy as Modern Log Collector
 - [docs/decisions/ADR-003-read-only-investigation-and-isolation.md](docs/decisions/ADR-003-read-only-investigation-and-isolation.md): Read-Only Investigation Boundary & LLM Isolation
+- [docs/decisions/ADR-004-mcp-as-tool-boundary.md](docs/decisions/ADR-004-mcp-as-tool-boundary.md): MCP as Standardized Tool Boundary
 - [docs/architecture/v0.1-overview.md](docs/architecture/v0.1-overview.md): Infrastructure Foundation Overview
-- [docs/architecture/v0.2-agent-architecture.md](docs/architecture/v0.2-agent-architecture.md): v0.2 AI SRE Agent Architecture & Schemas
+- [docs/architecture/v0.2-agent-architecture.md](docs/architecture/v0.2-agent-architecture.md): v0.2 AI SRE Agent Architecture
+- [docs/architecture/v0.3-mcp-architecture.md](docs/architecture/v0.3-mcp-architecture.md): v0.3 MCP Integration Architecture & Schemas
 
 ---
 

@@ -1,11 +1,7 @@
 import logging
 import uuid
-from typing import Dict, Tuple
-from agentops.agent.tools import (
-    KubernetesInvestigationTools,
-    LokiInvestigationTools,
-    PrometheusInvestigationTools,
-)
+from typing import Any, Dict, List, Optional, Tuple
+from agentops.mcp.client import SREMCPClient
 from agentops.models.evidence import (
     EvidenceType,
     InvestigationContext,
@@ -18,22 +14,16 @@ logger = logging.getLogger("agentops.orchestrator")
 
 class InvestigationOrchestrator:
     """
-    Deterministically gathers and normalizes telemetry across Kubernetes, Prometheus, and Loki.
+    Coordinates multi-signal evidence collection by invoking standardized tools
+    STRICTLY through the Model Context Protocol (MCP) Client interface.
     """
 
-    def __init__(
-        self,
-        k8s_tools: KubernetesInvestigationTools | None = None,
-        prom_tools: PrometheusInvestigationTools | None = None,
-        loki_tools: LokiInvestigationTools | None = None,
-    ):
-        self.k8s_tools = k8s_tools or KubernetesInvestigationTools()
-        self.prom_tools = prom_tools or PrometheusInvestigationTools()
-        self.loki_tools = loki_tools or LokiInvestigationTools()
+    def __init__(self, mcp_client: Optional[SREMCPClient] = None):
+        self.mcp_client = mcp_client or SREMCPClient()
 
     def collect_evidence(self, namespace: str, workload: str) -> Tuple[InvestigationContext, Dict[str, int]]:
         """
-        Execute deterministic multi-signal evidence collection.
+        Execute deterministic multi-signal evidence collection strictly via MCP.
         """
         inv_id = f"inv-{uuid.uuid4().hex[:8]}"
         context = InvestigationContext(
@@ -43,20 +33,29 @@ class InvestigationOrchestrator:
         )
         query_counts = {"k8s": 0, "prometheus": 0, "loki": 0}
 
-        # -------------------------------------------------------------
-        # 1. Kubernetes Investigation
-        # -------------------------------------------------------------
-        k8s_available = self.k8s_tools.client.is_available()
-        context.telemetry_status["kubernetes"] = TelemetryStatus(
-            source=TelemetrySource.KUBERNETES,
-            available=k8s_available,
-        )
+        # Step 0: Discover available MCP tools dynamically
+        try:
+            discovered = self.mcp_client.discover_tools()
+            logger.info(f"Discovered {len(discovered)} investigation tools on MCP server")
+        except Exception as e:
+            logger.warning(f"MCP tool discovery warning: {str(e)}")
 
-        if k8s_available:
-            try:
-                # 1a. Inspect Pod Health Summaries
-                pod_summaries = self.k8s_tools.get_pod_health(namespace=namespace, app=workload)
-                query_counts["k8s"] += 1
+        # -------------------------------------------------------------
+        # 1. Kubernetes Investigation via MCP
+        # -------------------------------------------------------------
+        try:
+            # 1a. Call k8s_get_pod_health
+            pod_summaries = self.mcp_client.call_tool(
+                "k8s_get_pod_health",
+                {"namespace": namespace, "app": workload},
+            )
+            query_counts["k8s"] += 1
+            context.telemetry_status["kubernetes"] = TelemetryStatus(
+                source=TelemetrySource.KUBERNETES,
+                available=True,
+            )
+
+            if isinstance(pod_summaries, list):
                 for pod in pod_summaries:
                     pod_name = pod.get("pod_name", "unknown")
                     restarts = pod.get("restart_count", 0)
@@ -79,178 +78,166 @@ class InvestigationOrchestrator:
                     context.add_evidence(
                         source=TelemetrySource.KUBERNETES,
                         resource=f"{namespace}/{pod_name}",
-                        metric_or_query="kubectl get pods",
+                        metric_or_query="mcp://k8s_get_pod_health",
                         observation=", ".join(obs_parts),
                         evidence_type=EvidenceType.FACT,
                         severity=severity,
                         raw_payload=pod,
                     )
 
-                # 1b. Inspect Warning Events
-                events = self.k8s_tools.get_warning_events(namespace=namespace, limit=20)
-                query_counts["k8s"] += 1
+            # 1b. Call k8s_get_events
+            events = self.mcp_client.call_tool(
+                "k8s_get_events",
+                {"namespace": namespace, "limit": 20, "resource_name": workload},
+            )
+            query_counts["k8s"] += 1
+            if isinstance(events, list):
                 for event in events:
                     reason = event.get("reason", "")
                     if reason in ("BackOff", "OOMKilled", "Unhealthy", "Failed", "Killing"):
                         context.add_evidence(
                             source=TelemetrySource.KUBERNETES,
                             resource=f"{namespace}/{event.get('object_name', workload)}",
-                            metric_or_query="kubectl get events",
+                            metric_or_query="mcp://k8s_get_events",
                             observation=f"Event {reason} (count {event.get('count', 1)}): {event.get('message')}",
                             evidence_type=EvidenceType.FACT,
                             severity="WARN" if reason != "OOMKilled" else "CRITICAL",
                             raw_payload=event,
                         )
-            except Exception as e:
-                logger.error(f"Kubernetes evidence collection failed: {str(e)}")
-                context.telemetry_status["kubernetes"].error_message = str(e)
-        else:
+
+        except Exception as e:
+            logger.error(f"Kubernetes MCP investigation failed: {str(e)}")
+            context.telemetry_status["kubernetes"] = TelemetryStatus(
+                source=TelemetrySource.KUBERNETES,
+                available=False,
+                error_message=str(e),
+            )
             context.add_evidence(
                 source=TelemetrySource.KUBERNETES,
                 resource=f"{namespace}/{workload}",
-                metric_or_query="kubectl",
-                observation="Kubernetes API was unreachable or unavailable during investigation.",
+                metric_or_query="mcp://k8s_get_pod_health",
+                observation="Kubernetes API was unreachable or unavailable during MCP investigation.",
                 evidence_type=EvidenceType.FACT,
                 severity="WARN",
             )
 
         # -------------------------------------------------------------
-        # 2. Prometheus Investigation
+        # 2. Prometheus Investigation via MCP
         # -------------------------------------------------------------
-        prom_available = self.prom_tools.client.is_available()
-        context.telemetry_status["prometheus"] = TelemetryStatus(
-            source=TelemetrySource.PROMETHEUS,
-            available=prom_available,
-        )
+        try:
+            # 2a. Call prom_query_error_rate
+            err_data = self.mcp_client.call_tool(
+                "prom_query_error_rate",
+                {"app": workload, "namespace": namespace, "duration": "2m"},
+            )
+            query_counts["prometheus"] += 1
+            context.telemetry_status["prometheus"] = TelemetryStatus(
+                source=TelemetrySource.PROMETHEUS,
+                available=True,
+            )
 
-        if prom_available:
-            try:
-                # 2a. HTTP Error Rate
-                error_rate = self.prom_tools.query_error_rate(app=workload, namespace=namespace)
-                query_counts["prometheus"] += 1
-                if error_rate is not None:
-                    severity = "CRITICAL" if error_rate > 30 else ("WARN" if error_rate > 5 else "INFO")
-                    context.add_evidence(
-                        source=TelemetrySource.PROMETHEUS,
-                        resource=workload,
-                        metric_or_query="sum(rate(http_requests_total{status=~'5..'}))",
-                        observation=f"HTTP 5xx error rate is currently {error_rate}% over the last 2m window.",
-                        evidence_type=EvidenceType.FACT,
-                        severity=severity,
-                    )
+            error_rate = err_data.get("error_rate_percentage") if isinstance(err_data, dict) else None
+            if error_rate is not None:
+                severity = "CRITICAL" if error_rate > 30 else ("WARN" if error_rate > 5 else "INFO")
+                context.add_evidence(
+                    source=TelemetrySource.PROMETHEUS,
+                    resource=workload,
+                    metric_or_query="mcp://prom_query_error_rate",
+                    observation=f"HTTP 5xx error rate is currently {error_rate}% over the last 2m window.",
+                    evidence_type=EvidenceType.FACT,
+                    severity=severity,
+                )
 
-                # 2b. Request breakdown
-                requests_summary = self.prom_tools.query_request_summary(app=workload, namespace=namespace)
-                query_counts["prometheus"] += 1
-                if requests_summary:
-                    formatted_summary = ", ".join(
-                        f"{r['endpoint']} [{r['status']}]: {r['count']}" for r in requests_summary
-                    )
-                    context.add_evidence(
-                        source=TelemetrySource.PROMETHEUS,
-                        resource=workload,
-                        metric_or_query="http_requests_total by endpoint, status",
-                        observation=f"Request totals: {formatted_summary}",
-                        evidence_type=EvidenceType.FACT,
-                        severity="INFO",
-                    )
+            # 2b. Call prom_query_memory (real telemetry)
+            mem_data = self.mcp_client.call_tool(
+                "prom_query_memory",
+                {"app": workload, "namespace": namespace},
+            )
+            query_counts["prometheus"] += 1
+            max_mem_mb = mem_data.get("max_memory_mb") if isinstance(mem_data, dict) else None
+            metric_name = mem_data.get("metric_name", "process_resident_memory_bytes") if isinstance(mem_data, dict) else "memory"
+            if max_mem_mb is not None and max_mem_mb > 0:
+                severity = "CRITICAL" if max_mem_mb > 80 else ("WARN" if max_mem_mb > 35 else "INFO")
+                context.add_evidence(
+                    source=TelemetrySource.PROMETHEUS,
+                    resource=workload,
+                    metric_or_query="mcp://prom_query_memory",
+                    observation=f"Prometheus memory metric '{metric_name}' reported {max_mem_mb} MB active memory usage across workload pods.",
+                    evidence_type=EvidenceType.FACT,
+                    severity=severity,
+                    raw_payload=mem_data,
+                )
 
-                # 2c. Synthetic Memory Allocation
-                mem_mb = self.prom_tools.query_synthetic_memory(app=workload)
-                query_counts["prometheus"] += 1
-                if mem_mb is not None and mem_mb > 0:
-                    severity = "CRITICAL" if mem_mb > 80 else ("WARN" if mem_mb > 30 else "INFO")
-                    context.add_evidence(
-                        source=TelemetrySource.PROMETHEUS,
-                        resource=workload,
-                        metric_or_query="app_memory_allocated_bytes",
-                        observation=f"Application synthetic memory allocation gauge reported {mem_mb} MB active allocation.",
-                        evidence_type=EvidenceType.FACT,
-                        severity=severity,
-                    )
-            except Exception as e:
-                logger.error(f"Prometheus evidence collection failed: {str(e)}")
-                context.telemetry_status["prometheus"].error_message = str(e)
-        else:
+        except Exception as e:
+            logger.error(f"Prometheus MCP investigation failed: {str(e)}")
+            context.telemetry_status["prometheus"] = TelemetryStatus(
+                source=TelemetrySource.PROMETHEUS,
+                available=False,
+                error_message=str(e),
+            )
             context.add_evidence(
                 source=TelemetrySource.PROMETHEUS,
                 resource=workload,
-                metric_or_query="prometheus",
-                observation="Prometheus server was unreachable or unavailable during investigation.",
+                metric_or_query="mcp://prom_query_error_rate",
+                observation="Prometheus server was unreachable or unavailable during MCP investigation.",
                 evidence_type=EvidenceType.FACT,
                 severity="WARN",
             )
 
         # -------------------------------------------------------------
-        # 3. Loki Investigation
+        # 3. Loki Investigation via MCP
         # -------------------------------------------------------------
-        loki_available = self.loki_tools.client.is_available()
-        context.telemetry_status["loki"] = TelemetryStatus(
-            source=TelemetrySource.LOKI,
-            available=loki_available,
-        )
+        try:
+            # 3a. Call loki_search_errors
+            logs = self.mcp_client.call_tool(
+                "loki_search_errors",
+                {"namespace": namespace, "app": workload, "lookback_seconds": 90, "limit": 20},
+            )
+            query_counts["loki"] += 1
+            context.telemetry_status["loki"] = TelemetryStatus(
+                source=TelemetrySource.LOKI,
+                available=True,
+            )
 
-        if loki_available:
-            try:
-                # 3a. Recent Application Errors
-                error_logs = self.loki_tools.search_error_logs(namespace=namespace, app=workload, limit=10)
-                query_counts["loki"] += 1
-                for log in error_logs:
+            if isinstance(logs, list):
+                for log in logs:
                     msg = log.get("message") or log.get("raw", "")
                     err_type = log.get("error_type", "Error")
                     req_id = log.get("request_id")
-                    obs = f"Application error log [{err_type}]: {msg}"
-                    if req_id:
-                        obs += f" (request_id={req_id})"
+                    severity = "ERROR"
+                    if "FATAL" in msg or "panic" in msg.lower() or err_type == "FatalProcessCrash":
+                        severity = "CRITICAL"
+                        obs = f"Fatal crash log captured: {msg}"
+                    elif "memory" in msg.lower() and "leak" in msg.lower():
+                        severity = "WARN"
+                        obs = f"Memory leak warning log: {msg}"
+                    else:
+                        obs = f"Application error log [{err_type}]: {msg}"
+                        if req_id:
+                            obs += f" (request_id={req_id})"
 
                     context.add_evidence(
                         source=TelemetrySource.LOKI,
                         resource=f"{namespace}/{workload}",
-                        metric_or_query='{namespace=...} | json | level="ERROR"',
+                        metric_or_query="mcp://loki_search_errors",
                         observation=obs,
                         evidence_type=EvidenceType.FACT,
-                        severity="ERROR",
+                        severity=severity,
                         raw_payload=log,
                     )
 
-                # 3b. Fatal Panics / Crashes
-                crash_logs = self.loki_tools.search_fatal_crashes(namespace=namespace, app=workload, limit=5)
-                query_counts["loki"] += 1
-                for log in crash_logs:
-                    msg = log.get("message") or log.get("raw", "")
-                    context.add_evidence(
-                        source=TelemetrySource.LOKI,
-                        resource=f"{namespace}/{workload}",
-                        metric_or_query='{namespace=...} |= "FATAL"',
-                        observation=f"Fatal crash log captured: {msg}",
-                        evidence_type=EvidenceType.FACT,
-                        severity="CRITICAL",
-                        raw_payload=log,
-                    )
-
-                # 3c. Memory Leak logs
-                mem_logs = self.loki_tools.search_memory_leaks(namespace=namespace, app=workload, limit=5)
-                query_counts["loki"] += 1
-                for log in mem_logs:
-                    msg = log.get("message") or log.get("raw", "")
-                    context.add_evidence(
-                        source=TelemetrySource.LOKI,
-                        resource=f"{namespace}/{workload}",
-                        metric_or_query='{namespace=...} |= "Memory allocation leak"',
-                        observation=f"Memory leak warning log: {msg}",
-                        evidence_type=EvidenceType.FACT,
-                        severity="WARN",
-                        raw_payload=log,
-                    )
-            except Exception as e:
-                logger.error(f"Loki evidence collection failed: {str(e)}")
-                context.telemetry_status["loki"].error_message = str(e)
-        else:
+        except Exception as e:
+            logger.error(f"Loki MCP investigation failed: {str(e)}")
+            context.telemetry_status["loki"] = TelemetryStatus(
+                source=TelemetrySource.LOKI,
+                available=False,
+                error_message=str(e),
+            )
             context.add_evidence(
                 source=TelemetrySource.LOKI,
                 resource=workload,
-                metric_or_query="loki",
-                observation="Loki log aggregation engine was unreachable or unavailable during investigation.",
+                metric_or_query="mcp://loki_search_errors",
+                observation="Loki log aggregation engine was unreachable or unavailable during MCP investigation.",
                 evidence_type=EvidenceType.FACT,
                 severity="WARN",
             )

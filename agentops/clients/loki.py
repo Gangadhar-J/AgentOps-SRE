@@ -34,7 +34,7 @@ class LokiClient:
     ) -> List[Dict[str, Any]]:
         """
         Execute a LogQL query (/loki/api/v1/query_range).
-        Defaults to searching the last 3 minutes to focus on recent incident activity.
+        Defaults to searching recent lookback window.
         """
         now_ns = int(time.time() * 1e9)
         start = start_ns or (now_ns - int(lookback_seconds * 1e9))
@@ -115,5 +115,14 @@ class LokiClient:
         query = f'{{namespace="{namespace}", app="{app}"}} |= "Memory allocation leak"'
         try:
             return self.query_range(query, limit=limit, lookback_seconds=lookback_seconds)
+        except Exception:
+            return []
+
+    def get_logs_by_request_id(
+        self, request_id: str, namespace: str = "demo", lookback_minutes: int = 10, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        query = f'{{namespace="{namespace}"}} |= "{request_id}"'
+        try:
+            return self.query_range(query, limit=limit, lookback_seconds=lookback_minutes * 60)
         except Exception:
             return []

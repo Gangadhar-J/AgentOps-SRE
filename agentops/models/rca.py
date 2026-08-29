@@ -38,6 +38,7 @@ class AgentObservabilityMetrics(BaseModel):
     completion_tokens: Optional[int] = None
     errors: List[str] = Field(default_factory=list)
     telemetry_availability: Dict[str, bool] = Field(default_factory=dict)
+    mcp_metrics: Optional[Dict[str, Any]] = Field(default=None, description="MCP request counts, latencies, and tool call stats")
 
 
 class RootCauseAnalysis(BaseModel):

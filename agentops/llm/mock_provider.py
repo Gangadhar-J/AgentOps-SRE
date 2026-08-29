@@ -37,7 +37,7 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
 
             # Resource Exhaustion / OOM signals
             if "oomkilled" in obs or "exit code 137" in obs:
-                score_oom += 4
+                score_oom += 6
                 oom_evidence_ids.append(item.id)
                 timeline.append(TimelineEvent(
                     timestamp=item.timestamp.isoformat(),
@@ -48,13 +48,10 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
             elif "memory allocation leak" in obs or "memory leak" in obs:
                 score_oom += 3
                 oom_evidence_ids.append(item.id)
-            elif "synthetic memory allocation" in obs:
-                score_oom += 2
-                oom_evidence_ids.append(item.id)
 
             # CrashLoopBackOff signals
             if "crashloopbackoff" in obs or ("exit code 1" in obs and "error" in obs):
-                score_crash += 4
+                score_crash += 6
                 crash_evidence_ids.append(item.id)
                 timeline.append(TimelineEvent(
                     timestamp=item.timestamp.isoformat(),
@@ -63,15 +60,12 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                     evidence_id=item.id,
                 ))
             elif "fatal" in obs or "panic" in obs or "fatalprocesscrash" in obs:
-                score_crash += 3
-                crash_evidence_ids.append(item.id)
-            elif "unhealthy" in obs and "liveness probe failed" in obs:
-                score_crash += 1
+                score_crash += 5
                 crash_evidence_ids.append(item.id)
 
             # High Error Rate signals
             if "5xx error rate" in obs or ("error rate is currently" in obs and "50" in obs):
-                score_500 += 4
+                score_500 += 6
                 err_500_evidence_ids.append(item.id)
                 timeline.append(TimelineEvent(
                     timestamp=item.timestamp.isoformat(),
@@ -80,10 +74,7 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                     evidence_id=item.id,
                 ))
             elif "databaseconnectiontimeout" in obs or "connection timeout" in obs:
-                score_500 += 3
-                err_500_evidence_ids.append(item.id)
-            elif "request totals" in obs and "[500]" in obs:
-                score_500 += 2
+                score_500 += 5
                 err_500_evidence_ids.append(item.id)
 
         telemetry_coverage = {
@@ -103,7 +94,7 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
             evidence_ids = [e.id for e in evidence_items[:2]] if evidence_items else []
             recommended_action = "Continue monitoring telemetry. No immediate remediation required."
 
-        elif max_score == score_oom:
+        elif score_oom > score_crash and score_oom > score_500:
             incident_type = IncidentType.RESOURCE_EXHAUSTION
             severity = IncidentSeverity.CRITICAL
             summary = f"Workload '{context.workload}' experienced container termination due to memory exhaustion (OOMKilled)."
@@ -120,7 +111,7 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                 "3. Roll out fixed image tag."
             )
 
-        elif max_score == score_crash:
+        elif score_crash > score_500:
             incident_type = IncidentType.CRASHLOOP_BACKOFF
             severity = IncidentSeverity.CRITICAL
             summary = f"Workload '{context.workload}' entered CrashLoopBackOff following unhandled process panics."

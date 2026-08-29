@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 import json
 import logging
 import subprocess
+import time
 from typing import Any, Dict, List, Optional
 from agentops.config import settings
 
@@ -57,7 +59,6 @@ class KubernetesInvestigationClient:
             cmd.extend(["-l", label_selector])
         data = self._run_read_only_cmd(cmd)
         items = data.get("items", [])
-        # Filter out terminating pods whose deletion timestamp is set
         return [p for p in items if not p.get("metadata", {}).get("deletionTimestamp")]
 
     def get_deployment(self, name: str, namespace: str) -> Optional[Dict[str, Any]]:
@@ -66,8 +67,32 @@ class KubernetesInvestigationClient:
         except Exception:
             return None
 
-    def get_pod_health_summaries(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_deployment_summary(self, name: str, namespace: str) -> Dict[str, Any]:
+        dep = self.get_deployment(name, namespace)
+        if not dep:
+            return {"found": False, "deployment": name, "namespace": namespace}
+        
+        status = dep.get("status", {})
+        spec = dep.get("spec", {})
+        return {
+            "found": True,
+            "deployment": name,
+            "namespace": namespace,
+            "desired_replicas": spec.get("replicas", 0),
+            "ready_replicas": status.get("readyReplicas", 0),
+            "available_replicas": status.get("availableReplicas", 0),
+            "unavailable_replicas": status.get("unavailableReplicas", 0),
+            "updated_replicas": status.get("updatedReplicas", 0),
+            "conditions": status.get("conditions", []),
+        }
+
+    def get_pod_health_summaries(
+        self, namespace: str, label_selector: Optional[str] = None, pod_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         pods = self.get_pods(namespace, label_selector)
+        if pod_name:
+            pods = [p for p in pods if p.get("metadata", {}).get("name") == pod_name]
+
         summaries = []
         for pod in pods:
             metadata = pod.get("metadata", {})
@@ -98,6 +123,7 @@ class KubernetesInvestigationClient:
 
             summaries.append({
                 "pod_name": metadata.get("name"),
+                "namespace": namespace,
                 "phase": status.get("phase"),
                 "is_ready": is_ready,
                 "restart_count": restarts,
@@ -108,7 +134,9 @@ class KubernetesInvestigationClient:
             })
         return summaries
 
-    def get_warning_events(self, namespace: str, limit: int = 30) -> List[Dict[str, Any]]:
+    def get_warning_events(
+        self, namespace: str, limit: int = 30, resource_name: Optional[str] = None, lookback_seconds: int = 180
+    ) -> List[Dict[str, Any]]:
         try:
             data = self._run_read_only_cmd([
                 "kubectl", "get", "events", "-n", namespace,
@@ -116,19 +144,36 @@ class KubernetesInvestigationClient:
             ])
             items = data.get("items", [])
             warning_events = []
-            for item in items[-limit:]:
+            now_ts = time.time()
+
+            for item in items:
+                involved = item.get("involvedObject", {})
+                obj_name = involved.get("name", "")
+                if resource_name and resource_name not in obj_name:
+                    continue
+
+                ts_str = item.get("lastTimestamp") or item.get("eventTime") or ""
+                # Check timestamp freshness if available
+                if ts_str:
+                    try:
+                        # Parse ISO 8601
+                        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if (now_ts - dt.timestamp()) > lookback_seconds:
+                            continue
+                    except Exception:
+                        pass
+
                 event_type = item.get("type", "Normal")
                 reason = item.get("reason", "Unknown")
-                involved = item.get("involvedObject", {})
                 warning_events.append({
                     "type": event_type,
                     "reason": reason,
                     "message": item.get("message", ""),
                     "object_kind": involved.get("kind"),
-                    "object_name": involved.get("name"),
+                    "object_name": obj_name,
                     "count": item.get("count", 1),
-                    "last_timestamp": item.get("lastTimestamp") or item.get("eventTime") or "",
+                    "last_timestamp": ts_str,
                 })
-            return warning_events
+            return warning_events[-limit:]
         except Exception:
             return []

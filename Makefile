@@ -6,16 +6,16 @@ CLUSTER_NAME ?= agentops
 all: help
 
 help:
-	@echo "AgentOps-SRE (v0.2) - Available Make Targets:"
+	@echo "AgentOps-SRE (v0.3) - Available Make Targets:"
 	@echo "  make setup          - Run preflight, spin up cluster, deploy observability stack & demo app"
 	@echo "  make start          - Start / ensure cluster and all workloads are running"
 	@echo "  make stop           - Teardown Kind cluster"
 	@echo "  make status         - Show status of cluster nodes, pods, and service URLs"
-	@echo "  make test           - Run local Python unit tests (clients, models, security guards)"
-	@echo "  make test-infra     - Run end-to-end infrastructure integration tests"
+	@echo "  make test           - Run local Python unit tests (schemas, clients, models, security guards)"
+	@echo "  make test-infra     - Run end-to-end infrastructure & MCP pipeline integration tests"
 	@echo "  make test-scenarios - Run full agent incident investigation scenarios against live cluster"
 	@echo "  make test-all       - Run all test suites"
-	@echo "  make investigate    - Run interactive CLI investigation for demo-app"
+	@echo "  make investigate    - Run interactive CLI investigation for demo-app over MCP"
 	@echo "  make demo           - Run incident reproduction demo"
 	@echo "  make preflight      - Verify local host environment dependencies"
 	@echo "  make clean          - Remove virtualenv and temporary caches"
@@ -62,7 +62,7 @@ test:
 	@uv run pytest tests/test_demo_app.py tests/unit/ -v
 
 test-infra:
-	@uv run pytest tests/test_infrastructure.py -v
+	@uv run pytest tests/test_infrastructure.py tests/integration/ -v
 
 test-scenarios:
 	@uv run pytest tests/scenario/ -v
@@ -74,13 +74,13 @@ investigate:
 
 demo:
 	@echo "================================================================"
-	@echo "          AgentOps-SRE: Incident Reproduction Demo              "
+	@echo "          AgentOps-SRE: Incident Reproduction Demo (MCP)        "
 	@echo "================================================================"
 	@echo "1. Triggering High Error Rate incident..."
 	@./scripts/trigger-incident.sh high-error-rate
 	@sleep 4
 	@echo ""
-	@echo "2. Running AI SRE Investigation Agent..."
+	@echo "2. Running AI SRE Investigation Agent over MCP..."
 	@$(MAKE) investigate
 	@sleep 2
 	@echo ""

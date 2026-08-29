@@ -12,7 +12,7 @@ logger = logging.getLogger("agentops.investigator")
 
 class SREAgent:
     """
-    Controlled AI-Assisted SRE Agent for incident investigation and RCA synthesis.
+    Controlled AI-Assisted SRE Agent for incident investigation and RCA synthesis via MCP.
     """
 
     def __init__(
@@ -26,16 +26,16 @@ class SREAgent:
     def investigate(self, namespace: Optional[str] = None, workload: str = "demo-app") -> RootCauseAnalysis:
         """
         Execute full incident investigation:
-        1. Collect deterministic multi-signal evidence.
+        1. Collect multi-signal evidence via MCP Client.
         2. Reason over evidence via LLM Provider.
-        3. Validate and attach agent self-observability metrics.
+        3. Validate and attach agent self-observability and MCP metrics.
         """
         start_time = time.time()
         ns = namespace or settings.DEFAULT_NAMESPACE
 
         logger.info(f"Starting incident investigation for workload '{workload}' in namespace '{ns}'")
 
-        # Step 1: Gather multi-modal evidence context
+        # Step 1: Gather multi-modal evidence context via MCP
         context, query_counts = self.orchestrator.collect_evidence(namespace=ns, workload=workload)
 
         # Step 2: Reason over evidence to generate Root Cause Analysis
@@ -45,17 +45,18 @@ class SREAgent:
         except Exception as e:
             logger.error(f"Primary RCA generation failed: {str(e)}")
             errors.append(str(e))
-            # Retry once with mock provider if external LLM failed
             from agentops.llm.mock_provider import MockRuleBasedLLMProvider
             fallback = MockRuleBasedLLMProvider()
             rca, llm_meta = fallback.generate_rca(context)
 
         total_duration = round(time.time() - start_time, 3)
 
-        # Step 3: Record agent self-observability metrics
+        # Step 3: Record agent self-observability and MCP metrics
         telemetry_avail = {
             k: v.available for k, v in context.telemetry_status.items()
         }
+        mcp_summary = self.orchestrator.mcp_client.metrics.summary() if hasattr(self.orchestrator, "mcp_client") else None
+
         agent_metrics = AgentObservabilityMetrics(
             investigation_id=context.investigation_id,
             duration_seconds=total_duration,
@@ -69,6 +70,7 @@ class SREAgent:
             completion_tokens=llm_meta.get("completion_tokens"),
             errors=errors,
             telemetry_availability=telemetry_avail,
+            mcp_metrics=mcp_summary,
         )
         rca.agent_metrics = agent_metrics
 

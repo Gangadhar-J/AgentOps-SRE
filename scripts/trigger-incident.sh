@@ -81,7 +81,7 @@ case "$SCENARIO" in
         echo -e "${BLUE}1. Patching demo-app with FAILURE_MODE=resource_exhaustion...${NC}"
         kubectl set env deployment/demo-app -n demo FAILURE_MODE=resource_exhaustion
         kubectl rollout restart deployment/demo-app -n demo
-        kubectl rollout status deployment/demo-app -n demo --timeout=60s
+        kubectl rollout status deployment/demo-app -n demo --timeout=20s || true
 
         echo -e "${YELLOW}2. Memory allocation worker active. Pod will exceed 128Mi limit shortly.${NC}"
         echo -e "   • ${CYAN}Kubernetes State:${NC} kubectl get pods -n demo -w (watch for OOMKilled)"
