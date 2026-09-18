@@ -27,6 +27,11 @@ class Settings:
     LOGS_LIMIT: int = int(os.getenv("LOGS_LIMIT", "50"))
     EVENTS_LIMIT: int = int(os.getenv("EVENTS_LIMIT", "30"))
 
+    # Project Paths
+    BASE_DIR: Path = Path(__file__).resolve().parent.parent
+    POLICIES_PATH: str = os.getenv("POLICIES_PATH", str(BASE_DIR / "config" / "policies.yaml"))
+    DB_PATH: str = os.getenv("AGENTOPS_DB_PATH", str(BASE_DIR / "data" / "agentops.db"))
+
     # Logging & Observability
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper().strip()
     OTEL_ENABLED: bool = os.getenv("OTEL_ENABLED", "true").lower().strip() in ("1", "true", "yes")

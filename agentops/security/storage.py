@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 from typing import Any, Dict, List, Optional
+from agentops.config import settings
 from agentops.security.approval import ApprovalRecord, ApprovalRequest
 
 logger = logging.getLogger("agentops.security.storage")
@@ -17,9 +18,8 @@ class SQLiteApprovalStore:
         if db_path:
             self.db_path = db_path
         else:
-            data_dir = os.path.join(os.getcwd(), "data")
-            os.makedirs(data_dir, exist_ok=True)
-            self.db_path = os.path.join(data_dir, "agentops.db")
+            self.db_path = settings.DB_PATH
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
         self._init_db()
 

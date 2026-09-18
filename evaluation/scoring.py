@@ -11,7 +11,13 @@ class WeightedScorer:
     """
 
     def __init__(self, config_path: Optional[str] = None):
-        cfg_file = config_path or os.path.join(os.getcwd(), "config", "evaluation.yaml")
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        default_cfg = os.path.join(base_dir, "config", "evaluation.yaml")
+        if not os.path.exists(default_cfg):
+            cwd_cfg = os.path.join(os.getcwd(), "config", "evaluation.yaml")
+            default_cfg = cwd_cfg if os.path.exists(cwd_cfg) else default_cfg
+
+        cfg_file = config_path or default_cfg
         self.weights: Dict[str, float] = {
             "rca_accuracy": 0.20,
             "evidence_accuracy": 0.20,

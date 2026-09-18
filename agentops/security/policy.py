@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 import uuid
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from agentops.config import settings
 from agentops.security.capabilities import CAPABILITY_PATTERN, CapabilityConstraints
 from agentops.security.context import SecurityContext
 from agentops.security.decision import PolicyDecision
@@ -73,7 +74,12 @@ class PolicyEngine:
         elif policy_file:
             self.policy_set = PolicySet.load_from_yaml(policy_file)
         else:
-            default_path = os.path.join(os.getcwd(), "config", "policies.yaml")
+            default_path = settings.POLICIES_PATH
+            if not os.path.exists(default_path):
+                # Fallback to current working directory if run from custom root
+                alt_path = os.path.join(os.getcwd(), "config", "policies.yaml")
+                default_path = alt_path if os.path.exists(alt_path) else default_path
+
             if os.path.exists(default_path):
                 self.policy_set = PolicySet.load_from_yaml(default_path)
             else:
