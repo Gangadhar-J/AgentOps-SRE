@@ -150,3 +150,38 @@ def trace_remediation(
         attrs["approval.id"] = approval_id
     with start_span("agent.remediation", attributes=attrs) as span:
         yield span
+
+
+@contextmanager
+def trace_approval(
+    action: str,
+    approval_id: Optional[str] = None,
+    status: Optional[str] = None,
+) -> Iterator[trace.Span]:
+    """Span for human-in-the-loop approval workflow and revalidation."""
+    attrs = {
+        "approval.action": action,
+    }
+    if approval_id:
+        attrs["approval.id"] = approval_id
+    if status:
+        attrs["approval.status"] = status
+    with start_span("agent.approval", attributes=attrs) as span:
+        yield span
+
+
+@contextmanager
+def trace_evaluation(
+    scenario_id: str,
+    mode: str,
+    run_id: Optional[str] = None,
+) -> Iterator[trace.Span]:
+    """Root span for benchmark scenario evaluation execution."""
+    attrs = {
+        "evaluation.scenario_id": scenario_id,
+        "evaluation.mode": mode,
+    }
+    if run_id:
+        attrs["evaluation.run_id"] = run_id
+    with start_span("agent.evaluation", attributes=attrs) as span:
+        yield span

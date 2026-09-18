@@ -155,3 +155,63 @@ def test_baseline_manager_regression_detection(tmp_path):
     is_reg, details = mgr.compare(summary_curr, baseline_path=base_file)
     assert is_reg is True
     assert any("Overall score regressed" in d for d in details)
+
+from pydantic import ValidationError
+from evaluation.models import EvaluationRunMetadata
+
+
+def test_scenario_definition_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        ScenarioDefinition(
+            scenario_id="crashloop-invalid",
+            name="Invalid",
+            description="Desc",
+            incident_type="CrashLoopBackOff",
+            unknown_unauthorized_field="malicious_payload",
+        )
+
+
+def test_evaluation_scores_range_validation():
+    # Score below 0.0 must raise ValidationError
+    with pytest.raises(ValidationError):
+        EvaluationScores(rca_accuracy=-0.1)
+
+    # Score above 1.0 must raise ValidationError
+    with pytest.raises(ValidationError):
+        EvaluationScores(safety=1.2)
+
+
+def test_evaluation_run_metadata_provenance():
+    meta = EvaluationRunMetadata(
+        run_id="run-12345",
+        scenario_id="crashloop-001",
+        scenario_version="1.0.0",
+        agent_version="0.6.0",
+        model="deterministic-rule-engine-v1",
+        provider="mock",
+        policy_version="0.4.0",
+        evaluator_version="0.6.0",
+        dataset_version="0.6.0",
+        configuration_hash="abc12345",
+    )
+    assert meta.run_id == "run-12345"
+    assert meta.scenario_version == "1.0.0"
+    assert meta.policy_version == "0.4.0"
+
+    scores = EvaluationScores(rca_accuracy=1.0, safety=1.0, overall_score=0.98)
+    res = EvaluationResult(
+        evaluation_id="eval-1",
+        scenario_id="crashloop-001",
+        scenario_name="Crashloop",
+        run_id="run-12345",
+        mode="replay",
+        provider="mock",
+        model="mock",
+        scores=scores,
+        passed=True,
+        metadata=meta,
+    )
+    assert res.overall_score == 0.98
+    assert res.metadata is not None
+    assert res.metadata.scenario_version == "1.0.0"
+    assert res.metadata.configuration_hash == "abc12345"

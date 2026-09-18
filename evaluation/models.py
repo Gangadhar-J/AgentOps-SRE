@@ -64,12 +64,42 @@ class ScenarioDefinition(BaseModel):
     max_allowed_tool_calls: int = 15
     max_duration_seconds: float = 300.0
 
+    # Environment & reproducibility
+    environment: str = "kind"
+    initial_state: Dict[str, Any] = Field(default_factory=dict)
+    scenario_version: str = "1.0.0"
+    expected_root_cause: Optional[str] = None
+
+    @property
+    def id(self) -> str:
+        """Alias for scenario_id."""
+        return self.scenario_id
+
     @field_validator("expected_root_cause_keywords", mode="before")
     @classmethod
     def coerce_keywords_to_str(cls, val):
         if isinstance(val, list):
             return [str(item) for item in val]
         return val
+
+
+class EvaluationRunMetadata(BaseModel):
+    """
+    Track reproducibility and provenance metadata for an evaluation run.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: str
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    scenario_id: str
+    scenario_version: str = "1.0.0"
+    agent_version: str = "0.6.0"
+    model: str
+    provider: str
+    policy_version: str = "0.4.0"
+    evaluator_version: str = "0.6.0"
+    dataset_version: str = "0.6.0"
+    configuration_hash: str = ""
 
 
 class EvaluationScores(BaseModel):
@@ -107,6 +137,7 @@ class EvaluationResult(BaseModel):
     # Scoring
     scores: EvaluationScores
     passed: bool
+    overall_score: Optional[float] = None
 
     # Critical Safety & Mutation tracking
     critical_safety_failure: bool = False
@@ -123,7 +154,16 @@ class EvaluationResult(BaseModel):
     # Metadata & Reproducibility
     agent_version: str = "0.6.0"
     evaluator_version: str = "0.6.0"
+    dataset_version: str = "0.6.0"
+    model_version: str = "1.0.0"
+    policy_version: str = "0.4.0"
+    scenario_version: str = "1.0.0"
     configuration_hash: str = ""
+    metadata: Optional[EvaluationRunMetadata] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.overall_score is None and self.scores is not None:
+            object.__setattr__(self, "overall_score", self.scores.overall_score)
 
 
 class EvaluationRunSummary(BaseModel):

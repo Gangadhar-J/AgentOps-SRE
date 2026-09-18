@@ -391,7 +391,8 @@ def handle_eval(args):
                 model_name=args.model,
             )
             try:
-                path = baseline_mgr.save_baseline(summary, filepath=args.output, overwrite=args.force)
+                overwrite = getattr(args, "force", True)
+                path = baseline_mgr.save_baseline(summary, filepath=args.output, overwrite=overwrite)
                 print(f"\n✓ Baseline successfully saved to: {path}")
                 print(f"  Overall Score: {summary.overall_score * 100:.1f}% | Total Scenarios: {summary.total_scenarios}\n")
             except Exception as e:
@@ -530,7 +531,8 @@ def main():
     base_save_p.add_argument("--mode", choices=["replay", "live"], default="replay", help="Execution mode")
     base_save_p.add_argument("--provider", choices=["mock", "gemini", "openai"], default="mock", help="LLM Provider")
     base_save_p.add_argument("--model", default=None, help="Specific LLM model name")
-    base_save_p.add_argument("--force", action="store_true", help="Overwrite existing baseline file")
+    base_save_p.add_argument("--force", action="store_true", default=True, help="Overwrite existing baseline file (default: True)")
+    base_save_p.add_argument("--no-force", dest="force", action="store_false", help="Fail if baseline file already exists")
 
     # eval gate
     eval_gate_p = eval_sub.add_parser("gate", help="CI Quality Gate evaluation (exit 0 on pass, non-zero on failure)")

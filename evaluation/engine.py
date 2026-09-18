@@ -31,6 +31,7 @@ from agentops.security.operator import OperatorIdentity
 from agentops.security.policy import PolicyEngine
 from agentops.security.requests import ActionRequest, ActionTarget
 
+from agentops.observability.tracing import start_span
 from evaluation.evaluators.efficiency_evaluator import EfficiencyEvaluator
 from evaluation.evaluators.evidence_evaluator import EvidenceEvaluator
 from evaluation.evaluators.policy_evaluator import PolicyComplianceEvaluator
@@ -41,6 +42,7 @@ from evaluation.evaluators.tool_evaluator import ToolSelectionEvaluator
 from evaluation.evaluators.verification_evaluator import VerificationEvaluator
 from evaluation.models import (
     EvaluationResult,
+    EvaluationRunMetadata,
     EvaluationRunSummary,
     EvaluationScores,
     ScenarioDefinition,
@@ -98,16 +100,27 @@ class EvaluationEngine:
         return scenario_ids
 
     def load_scenario(self, scenario_id: str) -> ScenarioDefinition:
-        """Load and validate scenario definition by scenario_id."""
+        """Load and validate scenario definition by scenario_id or base name."""
+        clean_id = scenario_id.replace(".yaml", "").replace(".yml", "")
+        candidates = [
+            clean_id,
+            f"{clean_id}-001",
+            clean_id.replace("-", "_"),
+            clean_id.replace("_", "-"),
+            f"{clean_id.replace('_', '-')}-001",
+        ]
         for root, _, files in os.walk(self.scenarios_dir):
-            for f in files:
+            for f in sorted(files):
                 if f.endswith(".yaml") or f.endswith(".yml"):
                     filepath = os.path.join(root, f)
                     try:
                         with open(filepath, "r", encoding="utf-8") as fp:
                             data = yaml.safe_load(fp)
-                        if data and data.get("scenario_id") == scenario_id:
-                            return ScenarioDefinition(**data)
+                        if data:
+                            sid = data.get("scenario_id", "")
+                            file_stem = f.rsplit(".", 1)[0]
+                            if sid in candidates or file_stem in candidates:
+                                return ScenarioDefinition(**data)
                     except Exception as e:
                         logger.warning(f"Error parsing {filepath}: {str(e)}")
         raise FileNotFoundError(f"Scenario definition '{scenario_id}' not found in {self.scenarios_dir}")
@@ -160,26 +173,27 @@ class EvaluationEngine:
         llm_provider = self._get_provider(provider_name, model_name)
         actual_model = getattr(llm_provider, "model_name", provider_name)
 
-        if mode == "replay":
-            return self._execute_replay_scenario(
-                scenario=scenario,
-                llm_provider=llm_provider,
-                run_id=current_run_id,
-                eval_id=eval_id,
-                provider_name=provider_name,
-                model_name=actual_model,
-                start_time=start_time,
-            )
-        else:
-            return self._execute_live_scenario(
-                scenario=scenario,
-                llm_provider=llm_provider,
-                run_id=current_run_id,
-                eval_id=eval_id,
-                provider_name=provider_name,
-                model_name=actual_model,
-                start_time=start_time,
-            )
+        with start_span("agent.evaluation", attributes={"evaluation.scenario_id": scenario.scenario_id, "evaluation.mode": mode, "evaluation.provider": provider_name, "evaluation.run_id": current_run_id}):
+            if mode == "replay":
+                return self._execute_replay_scenario(
+                    scenario=scenario,
+                    llm_provider=llm_provider,
+                    run_id=current_run_id,
+                    eval_id=eval_id,
+                    provider_name=provider_name,
+                    model_name=actual_model,
+                    start_time=start_time,
+                )
+            else:
+                return self._execute_live_scenario(
+                    scenario=scenario,
+                    llm_provider=llm_provider,
+                    run_id=current_run_id,
+                    eval_id=eval_id,
+                    provider_name=provider_name,
+                    model_name=actual_model,
+                    start_time=start_time,
+                )
 
     def _execute_replay_scenario(
         self,
@@ -564,6 +578,20 @@ class EvaluationEngine:
         config_content = f"{scenario.scenario_id}:{scores.overall_score}:{self.scorer.weights}"
         cfg_hash = compute_config_hash(config_content)
 
+        run_metadata = EvaluationRunMetadata(
+            run_id=run_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            scenario_id=scenario.scenario_id,
+            scenario_version=getattr(scenario, "scenario_version", "1.0.0"),
+            agent_version="0.6.0",
+            model=model_name,
+            provider=provider_name,
+            policy_version="0.4.0",
+            evaluator_version="0.6.0",
+            dataset_version="0.6.0",
+            configuration_hash=cfg_hash,
+        )
+
         return EvaluationResult(
             evaluation_id=eval_id,
             scenario_id=scenario.scenario_id,
@@ -575,6 +603,7 @@ class EvaluationEngine:
             timestamp=datetime.now(timezone.utc).isoformat(),
             scores=scores,
             passed=passed,
+            overall_score=scores.overall_score,
             critical_safety_failure=critical_safety_failure,
             infrastructure_mutated=infrastructure_mutated,
             unexpected_mutation=unexpected_mutation,
@@ -585,7 +614,12 @@ class EvaluationEngine:
             metrics=metrics,
             agent_version="0.6.0",
             evaluator_version="0.6.0",
+            dataset_version="0.6.0",
+            model_version="1.0.0",
+            policy_version="0.4.0",
+            scenario_version=getattr(scenario, "scenario_version", "1.0.0"),
             configuration_hash=cfg_hash,
+            metadata=run_metadata,
         )
 
     def run_all(

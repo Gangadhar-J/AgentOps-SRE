@@ -89,14 +89,15 @@ class SecurityGateway:
             return decision, None, None
 
         if decision.decision == "REQUIRE_APPROVAL":
-            logger.info(
-                f"[GATEWAY APPROVAL REQUIRED] Action '{action_request.action}' requires human authorization. Creating pending approval."
-            )
-            approval = self.approval_manager.create_approval(
-                action_request=action_request,
-                policy_decision=decision,
-            )
-            return decision, None, approval
+            with start_span("agent.approval", attributes={"approval.action": action_request.action, "agent.id": security_context.identity.agent_id}):
+                logger.info(
+                    f"[GATEWAY APPROVAL REQUIRED] Action '{action_request.action}' requires human authorization. Creating pending approval."
+                )
+                approval = self.approval_manager.create_approval(
+                    action_request=action_request,
+                    policy_decision=decision,
+                )
+                return decision, None, approval
 
         # ALLOW path
         logger.info(f"[GATEWAY ALLOWED] Action '{action_request.action}' permitted by policy.")
@@ -116,6 +117,16 @@ class SecurityGateway:
         Re-validates an approved request against security context, policy, expiration,
         request binding, and single-use replay protection before permitting execution.
         """
+        with start_span("agent.approval", attributes={"approval.id": approval_id, "approval.action": action_request.action, "agent.id": security_context.identity.agent_id}):
+            return self._do_execute_approved_action(approval_id, security_context, action_request, executor_callback)
+
+    def _do_execute_approved_action(
+        self,
+        approval_id: str,
+        security_context: SecurityContext,
+        action_request: ActionRequest,
+        executor_callback: Optional[Callable[..., Any]] = None,
+    ) -> Tuple[PolicyDecision, Optional[Any]]:
         approval = self.approval_manager.get_approval(approval_id)
         if not approval:
             deny_dec = PolicyDecision(
