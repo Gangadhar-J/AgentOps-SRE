@@ -1,18 +1,16 @@
 import pytest
-from agentops.mcp.client import SREMCPClient
 from agentops.mcp.server import create_mcp_server
 
 
-def test_mcp_server_exposes_only_authorized_read_only_tools():
-    """
-    Security Guarantee Test:
-    Ensures that the MCP Server registers ONLY the 8 authorized read-only investigation tools.
-    """
-    client = SREMCPClient()
-    discovered = client.discover_tools()
-    tool_names = {t["name"] for t in discovered}
+def test_mcp_server_exposes_only_authorized_tools():
+    server = create_mcp_server()
+    # In FastMCP/MCPServer, tools are stored in _tool_manager._tools
+    tools = getattr(server, "_tool_manager", {})._tools
 
-    expected_tools = {
+    registered_tool_names = set(tools.keys())
+
+    expected_authorized_tools = {
+        # Read-Only Investigation Tools
         "k8s_get_pod_health",
         "k8s_get_deployment_health",
         "k8s_get_events",
@@ -21,49 +19,58 @@ def test_mcp_server_exposes_only_authorized_read_only_tools():
         "prom_query_memory",
         "loki_search_errors",
         "loki_search_by_request_id",
+        # Controlled Remediation Tools (v0.5)
+        "k8s_restart_deployment",
+        "k8s_scale_deployment",
+        "k8s_rollback_deployment",
     }
 
-    assert tool_names == expected_tools, f"MCP tool set mismatch: {tool_names}"
+    assert registered_tool_names == expected_authorized_tools, (
+        f"Mismatch in registered MCP tools. Extra: {registered_tool_names - expected_authorized_tools}, "
+        f"Missing: {expected_authorized_tools - registered_tool_names}"
+    )
 
 
-def test_mcp_server_has_no_mutation_tools():
-    """
-    Security Guarantee Test:
-    Ensures that NO mutation tools exist on the MCP Server.
-    """
-    client = SREMCPClient()
-    discovered = client.discover_tools()
-    prohibited_keywords = [
+def test_mcp_server_has_no_generic_mutation_tools():
+    server = create_mcp_server()
+    tools = getattr(server, "_tool_manager", {})._tools
+    registered_tool_names = set(tools.keys())
+
+    prohibited_tool_keywords = [
         "delete",
-        "patch",
-        "update",
-        "scale",
-        "restart",
         "exec",
-        "apply",
-        "create",
         "shell",
-        "kill",
-        "write",
+        "apply",
+        "raw_patch",
+        "edit",
+        "drain",
+        "cordon",
+        "secret",
     ]
 
-    for tool in discovered:
-        name = tool["name"].lower()
-        for prohibited in prohibited_keywords:
-            assert prohibited not in name, f"Security Violation: Prohibited mutation tool '{name}' exposed on MCP Server!"
+    for tool_name in registered_tool_names:
+        for keyword in prohibited_tool_keywords:
+            assert keyword not in tool_name.lower(), (
+                f"Prohibited mutation tool '{tool_name}' detected on MCP Server"
+            )
 
 
 def test_no_arbitrary_query_tools_exposed():
-    """
-    Security Guarantee Test:
-    Ensures arbitrary query execution tools (promql_query, logql_query) are NOT exposed.
-    """
-    client = SREMCPClient()
-    discovered = client.discover_tools()
-    tool_names = [t["name"] for t in discovered]
+    server = create_mcp_server()
+    tools = getattr(server, "_tool_manager", {})._tools
+    registered_tool_names = set(tools.keys())
 
-    assert "promql_query" not in tool_names
-    assert "prometheus_query" not in tool_names
-    assert "logql_query" not in tool_names
-    assert "loki_query" not in tool_names
-    assert "shell_exec" not in tool_names
+    prohibited_raw_queries = [
+        "promql_query",
+        "raw_promql",
+        "logql_query",
+        "raw_logql",
+        "run_command",
+        "shell_exec",
+        "kubectl_exec",
+    ]
+
+    for raw_tool in prohibited_raw_queries:
+        assert raw_tool not in registered_tool_names, (
+            f"Unsafe raw query tool '{raw_tool}' must NOT be exposed to LLM agents"
+        )

@@ -8,6 +8,7 @@ class IncidentType(str, Enum):
     CRASHLOOP_BACKOFF = "CrashLoopBackOff"
     HIGH_ERROR_RATE = "HighErrorRate"
     RESOURCE_EXHAUSTION = "ResourceExhaustion"
+    BAD_DEPLOYMENT = "BadDeployment"
     UNKNOWN = "Unknown"
 
 

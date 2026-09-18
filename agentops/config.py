@@ -27,4 +27,10 @@ class Settings:
     LOGS_LIMIT: int = int(os.getenv("LOGS_LIMIT", "50"))
     EVENTS_LIMIT: int = int(os.getenv("EVENTS_LIMIT", "30"))
 
+    # Logging & Observability
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper().strip()
+    OTEL_ENABLED: bool = os.getenv("OTEL_ENABLED", "true").lower().strip() in ("1", "true", "yes")
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
 settings = Settings()
+

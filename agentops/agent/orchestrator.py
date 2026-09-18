@@ -9,6 +9,8 @@ from agentops.models.evidence import (
     TelemetryStatus,
 )
 
+from agentops.observability.tracing import start_span
+
 logger = logging.getLogger("agentops.orchestrator")
 
 
@@ -25,6 +27,10 @@ class InvestigationOrchestrator:
         """
         Execute deterministic multi-signal evidence collection strictly via MCP.
         """
+        with start_span("agent.mcp", attributes={"kubernetes.namespace": namespace, "kubernetes.workload": workload}):
+            return self._collect_evidence_internal(namespace, workload)
+
+    def _collect_evidence_internal(self, namespace: str, workload: str) -> Tuple[InvestigationContext, Dict[str, int]]:
         inv_id = f"inv-{uuid.uuid4().hex[:8]}"
         context = InvestigationContext(
             investigation_id=inv_id,

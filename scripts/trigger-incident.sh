@@ -17,6 +17,7 @@ function show_usage() {
     echo -e "  ${YELLOW}crashloop${NC}            - Simulates fatal process crashes leading to CrashLoopBackOff"
     echo -e "  ${YELLOW}high-error-rate${NC}      - Simulates upstream 500 errors & degraded readiness"
     echo -e "  ${YELLOW}resource-exhaustion${NC}  - Simulates rapid memory leak leading to OOMKilled"
+    echo -e "  ${YELLOW}bad-deployment${NC}       - Simulates broken deployment revision requiring rollback"
     echo -e "  ${GREEN}reset${NC}                - Restores demo-app to normal healthy state"
     echo ""
 }
@@ -38,6 +39,7 @@ case "$SCENARIO" in
                  -d "{\"item\": \"crash-item-$i\", \"amount\": $i}" >/dev/null 2>&1 || true
             sleep 0.2
         done
+        sleep 2
 
         echo -e "${YELLOW}3. Crash triggered! Observable telemetry signals:${NC}"
         echo -e "   • ${CYAN}Kubernetes State:${NC} kubectl get pods -n demo -w"
@@ -91,13 +93,26 @@ case "$SCENARIO" in
         echo -e "Run ${GREEN}$0 reset${NC} to recover the deployment."
         ;;
 
+    bad-deployment)
+        echo -e "${RED}======================================================${NC}"
+        echo -e "${RED}   Triggering Incident: Bad Deployment Revision       ${NC}"
+        echo -e "${RED}======================================================${NC}"
+        echo -e "${BLUE}1. Deploying broken image tag to demo-app...${NC}"
+        kubectl set image deployment/demo-app demo-app=demo-app:broken-v2 -n demo
+        echo -e "${YELLOW}2. Bad revision rolled out. New ReplicaSet will fail (ImagePullBackOff/ErrImagePull).${NC}"
+        echo -e "   • ${CYAN}Kubernetes State:${NC} kubectl rollout status deployment/demo-app -n demo"
+        echo -e "   • ${CYAN}Remediation:${NC}      Rollback to previous revision"
+        echo ""
+        echo -e "Run ${GREEN}$0 reset${NC} to recover the deployment."
+        ;;
+
     reset)
         echo -e "${BLUE}======================================================${NC}"
         echo -e "${BLUE}   Resetting Demo Application to Healthy State        ${NC}"
         echo -e "${BLUE}======================================================${NC}"
-        kubectl set env deployment/demo-app -n demo FAILURE_MODE=none
-        kubectl rollout restart deployment/demo-app -n demo
-        kubectl rollout status deployment/demo-app -n demo --timeout=60s
+        kubectl set image deployment/demo-app demo-app=demo-app:v0.1 -n demo || true
+        kubectl set env deployment/demo-app -n demo FAILURE_MODE=none || true
+        kubectl rollout status deployment/demo-app -n demo --timeout=90s
         echo -e "${GREEN}✓ Demo application successfully restored to healthy state!${NC}"
         ;;
 

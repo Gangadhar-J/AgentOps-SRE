@@ -49,3 +49,6 @@ class MCPMetricsTracker:
             "timeout_count": self.timeout_count,
             "recent_invocations": [m.model_dump() for m in self.invocations[-10:]],
         }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.summary()

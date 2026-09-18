@@ -1,0 +1,57 @@
+{
+  "scenario_id": "resource-exhaustion-001",
+  "evidence_items": [
+    {
+      "id": "E001",
+      "source": "kubernetes",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app-5d6c8b9-k4m2n",
+      "metric_or_query": "mcp://k8s_get_pod_health",
+      "observation": "Pod 'demo-app-5d6c8b9-k4m2n' phase: Running, ready: False, restartCount: 2, last termination reason: OOMKilled (exit code 137)",
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "E002",
+      "source": "prometheus",
+      "evidence_type": "FACT",
+      "resource": "demo-app",
+      "metric_or_query": "mcp://prom_query_memory",
+      "observation": "Prometheus memory metric 'process_resident_memory_bytes' reported 125 MB active memory usage across workload pods.",
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "E003",
+      "source": "loki",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app",
+      "metric_or_query": "mcp://loki_search_errors",
+      "observation": "Memory leak warning log: Memory allocation leak detected in background buffer worker",
+      "severity": "WARN"
+    }
+  ],
+  "telemetry_status": {
+    "kubernetes": {"available": true, "query_count": 2},
+    "prometheus": {"available": true, "query_count": 2},
+    "loki": {"available": true, "query_count": 1}
+  },
+  "invoked_tools": [
+    "k8s_get_pod_health",
+    "k8s_get_events",
+    "prom_query_error_rate",
+    "prom_query_memory",
+    "loki_search_errors"
+  ],
+  "remediation": {
+    "action": "k8s.remediation.scale_deployment",
+    "namespace": "demo",
+    "resource_name": "demo-app",
+    "parameters": {"replicas": 2},
+    "reason": "Scale deployment to 2 replicas to distribute memory pressure"
+  },
+  "verification": {
+    "healthy": true,
+    "checks": ["deployment_rollout_complete", "pods_ready", "exact_replicas_match"],
+    "failed_checks": [],
+    "observations": {"available_replicas": 2, "ready_replicas": 2}
+  }
+}

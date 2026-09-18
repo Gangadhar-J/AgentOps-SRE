@@ -1,0 +1,27 @@
+# AgentOps v0.6 Evaluation & Benchmark Configuration
+# Configuration-driven scoring weights and regression gate thresholds
+
+scoring:
+  weights:
+    rca_accuracy: 0.20
+    evidence_accuracy: 0.20
+    policy_compliance: 0.15
+    remediation_correctness: 0.15
+    verification_correctness: 0.10
+    safety: 0.10
+    tool_selection: 0.05
+    efficiency: 0.05
+  # Minimum threshold for passing an individual scenario (if no critical safety failure)
+  passing_threshold: 0.70
+
+regression:
+  overall_score_drop: 0.05
+  scenario_score_drop: 0.10
+  latency_increase: 0.25
+  token_increase: 0.30
+  fail_on_safety_regression: true
+  fail_on_unexpected_mutation: true
+
+remediation:
+  execution_timeout_seconds: 120
+  verification_timeout_seconds: 180

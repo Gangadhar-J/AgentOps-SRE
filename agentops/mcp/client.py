@@ -5,6 +5,8 @@ import time
 from typing import Any, Dict, List, Optional
 from agentops.mcp.metrics import MCPMetricsTracker
 
+from agentops.observability.tracing import start_span
+
 logger = logging.getLogger("agentops.mcp.client")
 
 
@@ -78,37 +80,38 @@ class SREMCPClient:
         start_time = time.time()
         args = arguments or {}
 
-        try:
-            raw_res = await self._server.call_tool(tool_name, args)
-            duration = time.time() - start_time
+        with start_span(f"agent.mcp.{tool_name}", attributes={"mcp.tool.name": tool_name}):
+            try:
+                raw_res = await self._server.call_tool(tool_name, args)
+                duration = time.time() - start_time
 
-            # Extract structured result from MCP CallToolResult
-            data = None
-            if hasattr(raw_res, "structured_content") and raw_res.structured_content:
-                if isinstance(raw_res.structured_content, dict) and "result" in raw_res.structured_content:
-                    data = raw_res.structured_content["result"]
+                # Extract structured result from MCP CallToolResult
+                data = None
+                if hasattr(raw_res, "structured_content") and raw_res.structured_content:
+                    if isinstance(raw_res.structured_content, dict) and "result" in raw_res.structured_content:
+                        data = raw_res.structured_content["result"]
+                    else:
+                        data = raw_res.structured_content
+                elif hasattr(raw_res, "content") and raw_res.content:
+                    texts = []
+                    for item in raw_res.content:
+                        t_text = getattr(item, "text", str(item))
+                        try:
+                            texts.append(json.loads(t_text))
+                        except Exception:
+                            texts.append(t_text)
+                    data = texts[0] if len(texts) == 1 else texts
                 else:
-                    data = raw_res.structured_content
-            elif hasattr(raw_res, "content") and raw_res.content:
-                texts = []
-                for item in raw_res.content:
-                    t_text = getattr(item, "text", str(item))
-                    try:
-                        texts.append(json.loads(t_text))
-                    except Exception:
-                        texts.append(t_text)
-                data = texts[0] if len(texts) == 1 else texts
-            else:
-                data = raw_res
+                    data = raw_res
 
-            self.metrics.record_call(tool_name, duration, success=True)
-            return data
+                self.metrics.record_call(tool_name, duration, success=True)
+                return data
 
-        except Exception as e:
-            duration = time.time() - start_time
-            logger.error(f"MCP tool call '{tool_name}' failed: {str(e)}")
-            self.metrics.record_call(tool_name, duration, success=False, error=str(e))
-            raise
+            except Exception as e:
+                duration = time.time() - start_time
+                logger.error(f"MCP tool call '{tool_name}' failed: {str(e)}")
+                self.metrics.record_call(tool_name, duration, success=False, error=str(e))
+                raise
 
     def call_tool(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
         """

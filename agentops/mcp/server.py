@@ -6,6 +6,7 @@ from agentops.agent.tools import (
     LokiInvestigationTools,
     PrometheusInvestigationTools,
 )
+from agentops.clients.remediation import KubernetesRemediationClient
 
 logger = logging.getLogger("agentops.mcp.server")
 
@@ -13,16 +14,17 @@ logger = logging.getLogger("agentops.mcp.server")
 def create_mcp_server() -> MCPServer:
     """
     Creates and configures the AgentOps SRE MCP Server.
-    Registers read-only Kubernetes, Prometheus, and Loki investigation tools.
+    Registers read-only investigation tools and controlled remediation tools.
     """
     server = MCPServer("agentops-sre-investigation-tools")
 
     k8s_tools = KubernetesInvestigationTools()
     prom_tools = PrometheusInvestigationTools()
     loki_tools = LokiInvestigationTools()
+    k8s_remediation = KubernetesRemediationClient()
 
     # -------------------------------------------------------------
-    # 1. Kubernetes Investigation Tools
+    # 1. Kubernetes Investigation Tools (Read-Only)
     # -------------------------------------------------------------
     @server.tool(
         name="k8s_get_pod_health",
@@ -46,7 +48,31 @@ def create_mcp_server() -> MCPServer:
         return k8s_tools.get_warning_events(namespace=namespace, limit=limit, resource_name=resource_name)
 
     # -------------------------------------------------------------
-    # 2. Prometheus Investigation Tools (Real Telemetry)
+    # 2. Kubernetes Controlled Remediation Tools (Write - Gateway Authorized)
+    # -------------------------------------------------------------
+    @server.tool(
+        name="k8s_restart_deployment",
+        description="Execute a controlled rolling restart on a target deployment for crash recovery.",
+    )
+    def k8s_restart_deployment(namespace: str = "demo", deployment: str = "demo-app", reason: Optional[str] = None) -> Dict[str, Any]:
+        return k8s_remediation.restart_deployment(namespace=namespace, deployment=deployment, reason=reason)
+
+    @server.tool(
+        name="k8s_scale_deployment",
+        description="Execute controlled horizontal scaling of deployment replicas within safe bounds (1-10).",
+    )
+    def k8s_scale_deployment(namespace: str = "demo", deployment: str = "demo-app", replicas: int = 1) -> Dict[str, Any]:
+        return k8s_remediation.scale_deployment(namespace=namespace, deployment=deployment, replicas=replicas)
+
+    @server.tool(
+        name="k8s_rollback_deployment",
+        description="Roll back a target deployment to a previous or specific stable revision.",
+    )
+    def k8s_rollback_deployment(namespace: str = "demo", deployment: str = "demo-app", revision: Optional[int] = None) -> Dict[str, Any]:
+        return k8s_remediation.rollback_deployment(namespace=namespace, deployment=deployment, revision=revision)
+
+    # -------------------------------------------------------------
+    # 3. Prometheus Investigation Tools (Real Telemetry)
     # -------------------------------------------------------------
     @server.tool(
         name="prom_query_error_rate",
@@ -70,7 +96,7 @@ def create_mcp_server() -> MCPServer:
         return prom_tools.query_memory(app=app, namespace=namespace)
 
     # -------------------------------------------------------------
-    # 3. Loki Investigation Tools
+    # 4. Loki Investigation Tools
     # -------------------------------------------------------------
     @server.tool(
         name="loki_search_errors",

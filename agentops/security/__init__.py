@@ -1,3 +1,11 @@
+from agentops.clients.remediation import KubernetesRemediationClient
+from agentops.models.remediation import (
+    PreRemediationSnapshot,
+    RemediationMetricsTracker,
+    RemediationResult,
+    RemediationStatus,
+    RemediationVerification,
+)
 from agentops.security.approval import (
     ApprovalManager,
     ApprovalRecord,
@@ -35,4 +43,10 @@ __all__ = [
     "ApprovalRecord",
     "ApprovalManager",
     "SQLiteApprovalStore",
+    "PreRemediationSnapshot",
+    "RemediationVerification",
+    "RemediationResult",
+    "RemediationStatus",
+    "RemediationMetricsTracker",
+    "KubernetesRemediationClient",
 ]

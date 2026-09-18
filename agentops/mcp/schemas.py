@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 
 # -------------------------------------------------------------
-# Kubernetes Tool Schemas
+# 1. Kubernetes Investigation Tool Schemas (Read-Only)
 # -------------------------------------------------------------
 class K8sGetPodHealthInput(BaseModel):
     namespace: str = Field(default="demo", description="Kubernetes namespace")
@@ -23,7 +23,28 @@ class K8sGetEventsInput(BaseModel):
 
 
 # -------------------------------------------------------------
-# Prometheus Tool Schemas
+# 2. Kubernetes Controlled Remediation Tool Schemas (Write)
+# -------------------------------------------------------------
+class K8sRestartDeploymentInput(BaseModel):
+    namespace: str = Field(default="demo", description="Kubernetes namespace")
+    deployment: str = Field(default="demo-app", description="Target deployment to restart")
+    reason: Optional[str] = Field(default=None, max_length=256, description="Remediation rationale")
+
+
+class K8sScaleDeploymentInput(BaseModel):
+    namespace: str = Field(default="demo", description="Kubernetes namespace")
+    deployment: str = Field(default="demo-app", description="Target deployment to scale")
+    replicas: int = Field(..., ge=1, le=10, description="Desired replica count (safe bounds 1-10)")
+
+
+class K8sRollbackDeploymentInput(BaseModel):
+    namespace: str = Field(default="demo", description="Kubernetes namespace")
+    deployment: str = Field(default="demo-app", description="Target deployment to rollback")
+    revision: Optional[int] = Field(default=None, ge=1, description="Specific revision to undo to (optional)")
+
+
+# -------------------------------------------------------------
+# 3. Prometheus Tool Schemas
 # -------------------------------------------------------------
 class PromQueryErrorRateInput(BaseModel):
     app: str = Field(default="demo-app", description="Workload / application label")
@@ -44,7 +65,7 @@ class PromQueryMemoryInput(BaseModel):
 
 
 # -------------------------------------------------------------
-# Loki Tool Schemas
+# 4. Loki Tool Schemas
 # -------------------------------------------------------------
 class LokiSearchErrorsInput(BaseModel):
     namespace: str = Field(default="demo", description="Kubernetes namespace")

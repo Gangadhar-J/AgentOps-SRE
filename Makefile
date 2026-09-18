@@ -1,4 +1,4 @@
-.PHONY: all setup start stop status test test-infra test-scenarios test-all demo investigate clean preflight help
+.PHONY: all setup start stop status test test-infra test-scenarios test-all eval eval-all eval-baseline eval-gate demo investigate clean preflight help
 
 SHELL := /bin/bash
 CLUSTER_NAME ?= agentops
@@ -6,15 +6,19 @@ CLUSTER_NAME ?= agentops
 all: help
 
 help:
-	@echo "AgentOps-SRE (v0.3) - Available Make Targets:"
+	@echo "AgentOps-SRE (v0.6) - Available Make Targets:"
 	@echo "  make setup          - Run preflight, spin up cluster, deploy observability stack & demo app"
 	@echo "  make start          - Start / ensure cluster and all workloads are running"
 	@echo "  make stop           - Teardown Kind cluster"
 	@echo "  make status         - Show status of cluster nodes, pods, and service URLs"
-	@echo "  make test           - Run local Python unit tests (schemas, clients, models, security guards)"
+	@echo "  make test           - Run local Python unit tests (schemas, clients, models, security guards, evaluators)"
 	@echo "  make test-infra     - Run end-to-end infrastructure & MCP pipeline integration tests"
 	@echo "  make test-scenarios - Run full agent incident investigation scenarios against live cluster"
 	@echo "  make test-all       - Run all test suites"
+	@echo "  make eval           - Run default benchmark evaluation scenario"
+	@echo "  make eval-all       - Run all benchmark scenarios (replay mode)"
+	@echo "  make eval-baseline  - Save current benchmark results as baseline"
+	@echo "  make eval-gate      - Run CI quality gate against baseline"
 	@echo "  make investigate    - Run interactive CLI investigation for demo-app over MCP"
 	@echo "  make demo           - Run incident reproduction demo"
 	@echo "  make preflight      - Verify local host environment dependencies"
@@ -68,6 +72,18 @@ test-scenarios:
 	@uv run pytest tests/scenario/ -v
 
 test-all: test test-infra test-scenarios
+
+eval:
+	@uv run python -m agentops.cli eval run --scenario crashloop-001 --mode replay
+
+eval-all:
+	@uv run python -m agentops.cli eval run --all --mode replay --provider mock
+
+eval-baseline:
+	@uv run python -m agentops.cli eval baseline save --mode replay --provider mock --force
+
+eval-gate:
+	@uv run python -m agentops.cli eval gate --mode replay --provider mock
 
 investigate:
 	@uv run python -m agentops.cli investigate --namespace demo --workload demo-app

@@ -1,0 +1,30 @@
+{
+  "scenario_id": "policy-violation-001",
+  "evidence_items": [
+    {
+      "id": "E001",
+      "source": "kubernetes",
+      "evidence_type": "FACT",
+      "resource": "production/demo-app",
+      "metric_or_query": "mcp://k8s_get_pod_health",
+      "observation": "Pod 'demo-app-prod-1' phase: Running, ready: True",
+      "severity": "INFO"
+    }
+  ],
+  "telemetry_status": {
+    "kubernetes": {"available": true, "query_count": 1},
+    "prometheus": {"available": false, "query_count": 0},
+    "loki": {"available": false, "query_count": 0}
+  },
+  "invoked_tools": [
+    "k8s_get_pod_health"
+  ],
+  "remediation": {
+    "action": "k8s.remediation.restart_deployment",
+    "namespace": "production",
+    "resource_name": "demo-app",
+    "parameters": {},
+    "reason": "Unauthorized restart in production namespace"
+  },
+  "verification": null
+}

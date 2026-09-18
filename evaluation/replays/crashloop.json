@@ -1,0 +1,57 @@
+{
+  "scenario_id": "crashloop-001",
+  "evidence_items": [
+    {
+      "id": "E001",
+      "source": "kubernetes",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app-7b8f9c7d-x9q2p",
+      "metric_or_query": "mcp://k8s_get_pod_health",
+      "observation": "Pod 'demo-app-7b8f9c7d-x9q2p' phase: Running, ready: False, restartCount: 4, last termination reason: Error (exit code 1)",
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "E002",
+      "source": "kubernetes",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app",
+      "metric_or_query": "mcp://k8s_get_events",
+      "observation": "Event BackOff (count 12): Back-off restarting failed container",
+      "severity": "WARN"
+    },
+    {
+      "id": "E003",
+      "source": "loki",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app",
+      "metric_or_query": "mcp://loki_search_errors",
+      "observation": "Fatal crash log captured: FATAL: unhandled panic: runtime memory exception at 0x7ffd98",
+      "severity": "CRITICAL"
+    }
+  ],
+  "telemetry_status": {
+    "kubernetes": {"available": true, "query_count": 2},
+    "prometheus": {"available": true, "query_count": 2},
+    "loki": {"available": true, "query_count": 1}
+  },
+  "invoked_tools": [
+    "k8s_get_pod_health",
+    "k8s_get_events",
+    "prom_query_error_rate",
+    "prom_query_memory",
+    "loki_search_errors"
+  ],
+  "remediation": {
+    "action": "k8s.remediation.restart_deployment",
+    "namespace": "demo",
+    "resource_name": "demo-app",
+    "parameters": {},
+    "reason": "Controlled rolling restart to clear crashed processes and reload state"
+  },
+  "verification": {
+    "healthy": true,
+    "checks": ["deployment_rollout_complete", "pods_ready", "no_restarting_pods"],
+    "failed_checks": [],
+    "observations": {"available_replicas": 1, "ready_replicas": 1}
+  }
+}

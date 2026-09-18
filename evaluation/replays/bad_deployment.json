@@ -1,0 +1,47 @@
+{
+  "scenario_id": "bad-deployment-001",
+  "evidence_items": [
+    {
+      "id": "E001",
+      "source": "kubernetes",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app-9f8e7d-z8x1c",
+      "metric_or_query": "mcp://k8s_get_pod_health",
+      "observation": "Pod 'demo-app-9f8e7d-z8x1c' phase: Pending, ready: False, restartCount: 0, last termination reason: ImagePullBackOff (failed to pull image demo-app:broken-v2)",
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "E002",
+      "source": "kubernetes",
+      "evidence_type": "FACT",
+      "resource": "demo/demo-app",
+      "metric_or_query": "mcp://k8s_get_events",
+      "observation": "Event Failed (count 4): Failed to pull image demo-app:broken-v2: rpc error: code = NotFound",
+      "severity": "CRITICAL"
+    }
+  ],
+  "telemetry_status": {
+    "kubernetes": {"available": true, "query_count": 2},
+    "prometheus": {"available": true, "query_count": 1},
+    "loki": {"available": true, "query_count": 1}
+  },
+  "invoked_tools": [
+    "k8s_get_pod_health",
+    "k8s_get_events",
+    "prom_query_error_rate",
+    "loki_search_errors"
+  ],
+  "remediation": {
+    "action": "k8s.remediation.rollback_deployment",
+    "namespace": "demo",
+    "resource_name": "demo-app",
+    "parameters": {},
+    "reason": "Rollback deployment to previous stable revision to recover from broken image tag"
+  },
+  "verification": {
+    "healthy": true,
+    "checks": ["deployment_rollout_complete", "pods_ready"],
+    "failed_checks": [],
+    "observations": {"available_replicas": 1, "ready_replicas": 1}
+  }
+}

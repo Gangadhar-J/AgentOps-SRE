@@ -26,18 +26,20 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
         oom_evidence_ids = []
         crash_evidence_ids = []
         err_500_evidence_ids = []
+        bad_deployment_evidence_ids = []
         timeline = []
 
         score_oom = 0
         score_crash = 0
         score_500 = 0
+        score_bad_deployment = 0
 
         for item in evidence_items:
             obs = item.observation.lower()
 
             # Resource Exhaustion / OOM signals
             if "oomkilled" in obs or "exit code 137" in obs:
-                score_oom += 6
+                score_oom += 10
                 oom_evidence_ids.append(item.id)
                 timeline.append(TimelineEvent(
                     timestamp=item.timestamp.isoformat(),
@@ -46,12 +48,12 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                     evidence_id=item.id,
                 ))
             elif "memory allocation leak" in obs or "memory leak" in obs:
-                score_oom += 3
+                score_oom += 5
                 oom_evidence_ids.append(item.id)
 
-            # CrashLoopBackOff signals
-            if "crashloopbackoff" in obs or ("exit code 1" in obs and "error" in obs):
-                score_crash += 6
+            # CrashLoopBackOff signals (only if not an OOM termination)
+            if ("crashloopbackoff" in obs or "exit code 1" in obs or "fatalprocesscrash" in obs) and "oomkilled" not in obs and "exit code 137" not in obs:
+                score_crash += 10
                 crash_evidence_ids.append(item.id)
                 timeline.append(TimelineEvent(
                     timestamp=item.timestamp.isoformat(),
@@ -59,8 +61,12 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                     description=item.observation,
                     evidence_id=item.id,
                 ))
-            elif "fatal" in obs or "panic" in obs or "fatalprocesscrash" in obs:
-                score_crash += 5
+            elif ("fatal" in obs or "panic" in obs) and "oomkilled" not in obs:
+                score_crash += 8
+                crash_evidence_ids.append(item.id)
+            elif ("back-off restarting" in obs or "backoff" in obs) and "oomkilled" not in obs and "exit code 137" not in obs:
+                # Only attribute generic backoff to crash if OOM hasn't occurred
+                score_crash += 4
                 crash_evidence_ids.append(item.id)
 
             # High Error Rate signals
@@ -77,13 +83,27 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                 score_500 += 5
                 err_500_evidence_ids.append(item.id)
 
+            # Bad Deployment / Rollback signals
+            if "imagepullbackoff" in obs or "errimagepull" in obs or "broken-v2" in obs or "failed to pull image" in obs:
+                score_bad_deployment += 6
+                bad_deployment_evidence_ids.append(item.id)
+                timeline.append(TimelineEvent(
+                    timestamp=item.timestamp.isoformat(),
+                    source=item.source.value,
+                    description=item.observation,
+                    evidence_id=item.id,
+                ))
+            elif "bad deployment" in obs or "rollback" in obs or "invalid image" in obs:
+                score_bad_deployment += 4
+                bad_deployment_evidence_ids.append(item.id)
+
         telemetry_coverage = {
             source: status.available
             for source, status in context.telemetry_status.items()
         }
 
         # Determine dominant incident hypothesis
-        max_score = max(score_oom, score_crash, score_500)
+        max_score = max(score_oom, score_crash, score_500, score_bad_deployment)
 
         if max_score == 0:
             incident_type = IncidentType.UNKNOWN
@@ -94,7 +114,23 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
             evidence_ids = [e.id for e in evidence_items[:2]] if evidence_items else []
             recommended_action = "Continue monitoring telemetry. No immediate remediation required."
 
-        elif score_oom > score_crash and score_oom > score_500:
+        elif max_score == score_bad_deployment:
+            incident_type = IncidentType.BAD_DEPLOYMENT
+            severity = IncidentSeverity.HIGH
+            summary = f"Workload '{context.workload}' failed deployment rollout due to invalid image or broken release revision."
+            root_cause = (
+                "A recent deployment update specified an unresolvable image reference or broken container configuration, "
+                "causing new replica pods to enter ImagePullBackOff/ErrImagePull and failing rollout progression."
+            )
+            confidence = 0.95 if (score_bad_deployment >= 6) else 0.82
+            evidence_ids = bad_deployment_evidence_ids
+            recommended_action = (
+                "1. Roll back deployment to the previous stable revision.\n"
+                "2. Verify container image repository tags in CI/CD pipeline.\n"
+                "3. Monitor post-rollback rollout health."
+            )
+
+        elif max_score == score_oom:
             incident_type = IncidentType.RESOURCE_EXHAUSTION
             severity = IncidentSeverity.CRITICAL
             summary = f"Workload '{context.workload}' experienced container termination due to memory exhaustion (OOMKilled)."
@@ -111,7 +147,7 @@ class MockRuleBasedLLMProvider(BaseLLMProvider):
                 "3. Roll out fixed image tag."
             )
 
-        elif score_crash > score_500:
+        elif max_score == score_crash:
             incident_type = IncidentType.CRASHLOOP_BACKOFF
             severity = IncidentSeverity.CRITICAL
             summary = f"Workload '{context.workload}' entered CrashLoopBackOff following unhandled process panics."

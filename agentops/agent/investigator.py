@@ -7,6 +7,8 @@ from agentops.llm.base import BaseLLMProvider
 from agentops.llm.factory import get_llm_provider
 from agentops.models.rca import AgentObservabilityMetrics, RootCauseAnalysis
 
+from agentops.observability.tracing import start_span
+
 logger = logging.getLogger("agentops.investigator")
 
 
@@ -35,27 +37,31 @@ class SREAgent:
 
         logger.info(f"Starting incident investigation for workload '{workload}' in namespace '{ns}'")
 
-        # Step 1: Gather multi-modal evidence context via MCP
-        context, query_counts = self.orchestrator.collect_evidence(namespace=ns, workload=workload)
+        with start_span("agent.investigation", attributes={"kubernetes.namespace": ns, "kubernetes.workload": workload}):
+            # Step 1: Gather multi-modal evidence context via MCP
+            context, query_counts = self.orchestrator.collect_evidence(namespace=ns, workload=workload)
+            self.last_context = context
 
-        # Step 2: Reason over evidence to generate Root Cause Analysis
-        errors = []
-        try:
-            rca, llm_meta = self.llm_provider.generate_rca(context)
-        except Exception as e:
-            logger.error(f"Primary RCA generation failed: {str(e)}")
-            errors.append(str(e))
-            from agentops.llm.mock_provider import MockRuleBasedLLMProvider
-            fallback = MockRuleBasedLLMProvider()
-            rca, llm_meta = fallback.generate_rca(context)
+            # Step 2: Reason over evidence to generate Root Cause Analysis
+            errors = []
+            with start_span("agent.llm", attributes={"investigation.id": context.investigation_id}):
+                try:
+                    rca, llm_meta = self.llm_provider.generate_rca(context)
+                except Exception as e:
+                    logger.error(f"Primary RCA generation failed: {str(e)}")
+                    errors.append(str(e))
+                    from agentops.llm.mock_provider import MockRuleBasedLLMProvider
+                    fallback = MockRuleBasedLLMProvider()
+                    rca, llm_meta = fallback.generate_rca(context)
 
-        total_duration = round(time.time() - start_time, 3)
+            total_duration = round(time.time() - start_time, 3)
 
-        # Step 3: Record agent self-observability and MCP metrics
-        telemetry_avail = {
-            k: v.available for k, v in context.telemetry_status.items()
-        }
-        mcp_summary = self.orchestrator.mcp_client.metrics.summary() if hasattr(self.orchestrator, "mcp_client") else None
+            # Step 3: Record agent self-observability and MCP metrics
+            with start_span("agent.rca", attributes={"incident.type": rca.incident_type.value if hasattr(rca.incident_type, "value") else str(rca.incident_type), "confidence": rca.confidence}):
+                telemetry_avail = {
+                    k: v.available for k, v in context.telemetry_status.items()
+                }
+                mcp_summary = self.orchestrator.mcp_client.metrics.summary() if hasattr(self.orchestrator, "mcp_client") else None
 
         agent_metrics = AgentObservabilityMetrics(
             investigation_id=context.investigation_id,
