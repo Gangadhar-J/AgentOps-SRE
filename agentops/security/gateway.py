@@ -316,6 +316,11 @@ class SecurityGateway:
                 },
             )
 
+        # When approval_id is provided, bind action_request to the approved request
+        approval_obj = self.approval_manager.get_approval(approval_id)
+        if approval_obj:
+            action_request = approval_obj.action_request
+
         # Execution callback for Kubernetes mutation
         mutation_details = {}
 

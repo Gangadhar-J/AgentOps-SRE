@@ -178,6 +178,7 @@ class KubernetesRemediationClient:
                 updated = status.get("updatedReplicas", 0)
 
                 observations["desired_replicas"] = desired
+                observations["expected_replicas"] = desired
                 observations["available_replicas"] = available
                 observations["ready_replicas"] = ready
                 observations["updated_replicas"] = updated

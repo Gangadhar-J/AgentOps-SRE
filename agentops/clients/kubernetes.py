@@ -53,6 +53,48 @@ class KubernetesInvestigationClient:
         except Exception:
             return False
 
+    def get_namespaces(self) -> List[str]:
+        """
+        Discover active cluster namespaces (Read-Only).
+        """
+        try:
+            data = self._run_read_only_cmd(["kubectl", "get", "namespaces", "-o", "json"])
+            items = data.get("items", [])
+            return [
+                ns.get("metadata", {}).get("name")
+                for ns in items
+                if ns.get("metadata", {}).get("name")
+            ]
+        except Exception as e:
+            logger.error(f"Failed to discover namespaces: {str(e)}")
+            return []
+
+    def get_deployments(self, namespace: str) -> List[Dict[str, Any]]:
+        """
+        Discover active deployments in a namespace (Read-Only).
+        """
+        try:
+            data = self._run_read_only_cmd(["kubectl", "get", "deployments", "-n", namespace, "-o", "json"])
+            items = data.get("items", [])
+            deployments = []
+            for dep in items:
+                meta = dep.get("metadata", {})
+                spec = dep.get("spec", {})
+                status = dep.get("status", {})
+                deployments.append({
+                    "name": meta.get("name"),
+                    "namespace": namespace,
+                    "desired_replicas": spec.get("replicas", 0),
+                    "ready_replicas": status.get("readyReplicas", 0),
+                    "available_replicas": status.get("availableReplicas", 0),
+                    "updated_replicas": status.get("updatedReplicas", 0),
+                    "created_at": meta.get("creationTimestamp"),
+                })
+            return deployments
+        except Exception as e:
+            logger.error(f"Failed to discover deployments in namespace '{namespace}': {str(e)}")
+            return []
+
     def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict[str, Any]]:
         cmd = ["kubectl", "get", "pods", "-n", namespace, "-o", "json"]
         if label_selector:

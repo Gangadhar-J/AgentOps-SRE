@@ -25,7 +25,12 @@ class SREAgent:
         self.orchestrator = orchestrator or InvestigationOrchestrator()
         self.llm_provider = llm_provider or get_llm_provider()
 
-    def investigate(self, namespace: Optional[str] = None, workload: str = "demo-app") -> RootCauseAnalysis:
+    def investigate(
+        self,
+        namespace: Optional[str] = None,
+        workload: str = "demo-app",
+        incident_description: Optional[str] = None,
+    ) -> RootCauseAnalysis:
         """
         Execute full incident investigation:
         1. Collect multi-signal evidence via MCP Client.
@@ -40,6 +45,8 @@ class SREAgent:
         with start_span("agent.investigation", attributes={"kubernetes.namespace": ns, "kubernetes.workload": workload}):
             # Step 1: Gather multi-modal evidence context via MCP
             context, query_counts = self.orchestrator.collect_evidence(namespace=ns, workload=workload)
+            if incident_description:
+                context.metadata["incident_description"] = incident_description
             self.last_context = context
 
             # Step 2: Reason over evidence to generate Root Cause Analysis

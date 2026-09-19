@@ -17,11 +17,169 @@ from agentops.security.operator import OperatorIdentity
 from agentops.security.policy import PolicyEngine
 from agentops.security.requests import ActionRequest, ActionTarget
 
+from agentops.incident.orchestrator import IncidentWorkflowManager
+from agentops.api.app import create_app
+
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("agentops.cli")
+
+
+def handle_operator_incident(args):
+    """
+    Unified, single-command incident investigation and optional remediation for SRE operators.
+    """
+    target = args.target
+    if "/" in target:
+        namespace, workload = target.split("/", 1)
+    else:
+        namespace = getattr(args, "namespace", "demo") or "demo"
+        workload = target
+
+    workflow = IncidentWorkflowManager()
+    logger.info(f"Investigating incident on {namespace}/{workload} (Provider: {args.provider}, DryRun: {args.dry_run})")
+
+    report = workflow.investigate_and_recommend(
+        namespace=namespace,
+        workload=workload,
+        incident_description=args.incident,
+        provider_name=args.provider,
+        model_name=args.model,
+        dry_run=args.dry_run,
+    )
+
+    if args.json and not (args.auto or args.yes):
+        print(report.model_dump_json(indent=2))
+        return
+
+    print("\n" + "=" * 70)
+    print("              AGENTOPS SRE - INCIDENT INVESTIGATION REPORT")
+    print("=" * 70)
+    print(f"Incident ID:       {report.incident_id}")
+    print(f"Status:            {report.status}")
+    print(f"Source:            {report.source}")
+    print(f"Workload:          {report.namespace}/{report.workload}")
+    print(f"Incident Type:     {report.incident_type}")
+    print(f"Confidence:        {report.confidence * 100:.1f}%")
+    if report.llm_runtime:
+        rt = report.llm_runtime
+        tok_str = f"Prompt: {rt.prompt_tokens}, Compl: {rt.completion_tokens}, Total: {rt.total_tokens}" if rt.total_tokens is not None else "Tokens: N/A"
+        tps_str = f" ({rt.tokens_per_second} tok/s)" if rt.tokens_per_second else ""
+        print(f"AI Model Runtime:  {rt.provider} / {rt.model} [{rt.mode}] ({rt.latency_seconds:.2f}s, {tok_str}{tps_str})")
+    print()
+
+    print("-" * 70)
+    print("ROOT CAUSE ANALYSIS")
+    print("-" * 70)
+    print(f"Summary:    {report.summary}")
+    print(f"Root Cause: {report.root_cause}\n")
+
+    print("-" * 70)
+    print(f"CORRELATED TELEMETRY EVIDENCE ({len(report.evidence_items)} items, {report.duration_seconds}s)")
+    print("-" * 70)
+    print(f"  • Kubernetes: {report.evidence_summary.get('kubernetes', 0)} signal(s)")
+    print(f"  • Prometheus: {report.evidence_summary.get('prometheus', 0)} signal(s)")
+    print(f"  • Loki:       {report.evidence_summary.get('loki', 0)} signal(s)")
+    for ev in report.evidence_items:
+        print(f"    - [{ev.source.upper()}] {ev.resource}: {ev.observation}")
+
+    print("\n" + "-" * 70)
+    print("RECOMMENDED REMEDIATION & POLICY GOVERNANCE")
+    print("-" * 70)
+    print(f"Action:            {report.recommended_action}")
+    print(f"Recommendation:    {report.recommended_remediation}")
+    print(f"Risk Level:        {report.risk_level}")
+    print(f"Policy Decision:   {report.policy_decision}")
+    if report.policy_reason:
+        print(f"Policy Reason:     {report.policy_reason}")
+    if report.approval_id:
+        print(f"Approval ID:       {report.approval_id}")
+    print("=" * 70 + "\n")
+
+    if report.status == "PENDING_APPROVAL" and (args.auto or args.yes):
+        operator = args.operator or "local-sre"
+        print(f"⚡ Auto-approval requested. Authorizing remediation with operator '{operator}'...")
+        summary = workflow.approve_and_execute(
+            approval_id=report.approval_id,
+            operator_name=operator,
+            reason="Auto-authorized via agentops incident --auto",
+        )
+        if args.json:
+            print(summary.model_dump_json(indent=2))
+            return
+        _print_execution_summary(summary)
+
+    elif report.status == "PENDING_APPROVAL":
+        print("Remediation requires operator authorization.")
+        print(f"  To authorize:  agentops approve {report.approval_id} --operator {args.operator or 'local-sre'}")
+        print("  Or re-run:     agentops incident " + target + " --auto\n")
+
+
+def handle_operator_approve(args):
+    """
+    Authorize a pending approval and execute remediation with rollout verification.
+    """
+    workflow = IncidentWorkflowManager()
+    operator = args.operator or "local-sre"
+    reason = args.reason or f"Operator '{operator}' authorized remediation via CLI"
+
+    try:
+        summary = workflow.approve_and_execute(
+            approval_id=args.approval_id,
+            operator_name=operator,
+            reason=reason,
+        )
+        if args.json:
+            print(summary.model_dump_json(indent=2))
+            return
+        _print_execution_summary(summary)
+    except Exception as e:
+        print(f"Error approving and executing remediation: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _print_execution_summary(summary):
+    print("\n" + "=" * 70)
+    print("           REMEDIATION EXECUTION & POST-VERIFICATION REPORT")
+    print("=" * 70)
+    print(f"Execution ID:      {summary.execution_id}")
+    print(f"Approval ID:       {summary.approval_id}")
+    print(f"Action:            {summary.action}")
+    print(f"Target:            {summary.target.get('namespace')}/{summary.target.get('resource_name')}")
+    print(f"Authorization:     {summary.authorization_status}")
+    print(f"Mutation Status:   {summary.mutation_status}")
+    print(f"Rollout Status:    {summary.rollout_status} (Ready: {summary.ready_replicas}, Desired: {summary.desired_replicas})")
+    print(f"Resolution Status: {summary.resolution_status}")
+    if summary.verification_result:
+        ver = summary.verification_result
+        print("-" * 70)
+        print("POST-VERIFICATION CHECKS")
+        print(f"  Passed:          {', '.join(ver.get('checks', []))}")
+        if ver.get("failed_checks"):
+            print(f"  Failed:          {', '.join(ver.get('failed_checks', []))}")
+        print(f"  Observations:    {ver.get('observations', {})}")
+    print("=" * 70 + "\n")
+
+
+def handle_serve(args):
+    """
+    Launch the SRE Operator Console Web UI and REST API.
+    """
+    app = create_app()
+    host = args.host
+    port = args.port
+    print("\n" + "=" * 65)
+    print("         AGENTOPS SRE - OPERATOR CONSOLE & REST API")
+    print("=" * 65)
+    print(f" Web Console UI:  http://{host}:{port}/")
+    print(f" REST API:        http://{host}:{port}/api/status")
+    print(f" Cluster Status:  Connected via Kubernetes context")
+    print(" Press Ctrl+C to stop.")
+    print("=" * 65 + "\n")
+    app.run(host=host, port=port, debug=args.debug)
+
 
 
 def handle_investigate(args):
@@ -32,6 +190,9 @@ def handle_investigate(args):
         llm_provider = GeminiLLMProvider(model_name=args.model or "gemini-2.5-pro")
     elif args.provider == "openai":
         llm_provider = OpenAILLMProvider(model_name=args.model or "gpt-4o")
+    elif args.provider == "ollama":
+        from agentops.config import settings
+        llm_provider = OpenAILLMProvider(base_url=f"{settings.OLLAMA_URL}/v1", model_name=args.model or "qwen3.5:2b")
     else:
         llm_provider = MockRuleBasedLLMProvider()
 
@@ -69,8 +230,16 @@ def handle_investigate(args):
     print("-" * 70)
     print(f"SUPPORTING EVIDENCE ({len(rca.evidence_ids)} items)")
     print("-" * 70)
+    context_evidence = {}
+    if hasattr(agent, "last_context") and agent.last_context:
+        context_evidence = {ev.id: ev for ev in agent.last_context.evidence_items}
+
     for ev_id in rca.evidence_ids:
-        print(f"  • [{ev_id}]")
+        if ev_id in context_evidence:
+            item = context_evidence[ev_id]
+            print(f"  • [{ev_id}] ({item.source.value.upper()}) {item.observation}")
+        else:
+            print(f"  • [{ev_id}]")
 
     print("\n" + "-" * 70)
     print("TIMELINE OF EVENTS")
@@ -87,12 +256,21 @@ def handle_investigate(args):
         print("\n" + "-" * 70)
         print("MCP & AGENT OBSERVABILITY")
         print("-" * 70)
-        print(f"  Total Duration:     {rca.agent_metrics.total_investigation_duration_seconds:.2f}s")
-        print(f"  Telemetry Queries:  {rca.agent_metrics.total_telemetry_queries}")
+        total_queries = (
+            rca.agent_metrics.k8s_query_count
+            + rca.agent_metrics.prometheus_query_count
+            + rca.agent_metrics.loki_query_count
+        )
+        print(f"  Total Duration:     {rca.agent_metrics.duration_seconds:.2f}s")
+        print(f"  Telemetry Queries:  {total_queries} (K8s: {rca.agent_metrics.k8s_query_count}, Prom: {rca.agent_metrics.prometheus_query_count}, Loki: {rca.agent_metrics.loki_query_count})")
+        print(f"  LLM Latency:        {rca.agent_metrics.llm_latency_seconds:.2f}s ({rca.agent_metrics.llm_provider} / {rca.agent_metrics.llm_model})")
+        if rca.agent_metrics.prompt_tokens:
+            print(f"  Tokens:             Prompt: {rca.agent_metrics.prompt_tokens}, Completion: {rca.agent_metrics.completion_tokens}")
         if rca.agent_metrics.mcp_metrics:
             mcp_m = rca.agent_metrics.mcp_metrics
-            print(f"  MCP Invocations:    {mcp_m.tool_invocations} (Failures: {mcp_m.tool_failures})")
-            print(f"  MCP Tool Latencies: {mcp_m.average_tool_duration_seconds:.4f}s avg")
+            invocations = mcp_m.get("tool_invocations", 0) if isinstance(mcp_m, dict) else getattr(mcp_m, "tool_invocations", 0)
+            failures = mcp_m.get("tool_failures", 0) if isinstance(mcp_m, dict) else getattr(mcp_m, "tool_failures", 0)
+            print(f"  MCP Invocations:    {invocations} (Failures: {failures})")
 
     print("=" * 70 + "\n")
 
@@ -430,12 +608,45 @@ def main():
     parser = argparse.ArgumentParser(description="AgentOps: Secure AI SRE Platform")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # 0. SRE Operator Unified Commands (v0.7)
+    inc_p = subparsers.add_parser("incident", help="Unified single-command incident investigation & remediation")
+    inc_p.add_argument("target", help="Target workload (e.g. demo-app or demo/demo-app)")
+    inc_p.add_argument("--namespace", default="demo", help="Kubernetes namespace (defaults to target prefix or demo)")
+    inc_p.add_argument("--incident", default=None, help="Incident context or alert description")
+    inc_p.add_argument("--provider", choices=["mock", "gemini", "openai", "ollama"], default="mock", help="LLM Provider")
+    inc_p.add_argument("--model", default=None, help="Specific LLM model name")
+    inc_p.add_argument("--dry-run", action="store_true", help="Evaluate policy & risk without creating approval or executing")
+    inc_p.add_argument("--auto", action="store_true", help="Non-interactive execution (auto-authorizes if approval required)")
+    inc_p.add_argument("-y", "--yes", action="store_true", help="Confirm execution without interactive confirmation")
+    inc_p.add_argument("--operator", default="local-sre", help="Operator identity for authorization audit")
+    inc_p.add_argument("--json", action="store_true", help="Output report as raw JSON")
+    inc_p.set_defaults(func=handle_operator_incident)
+
+    single_app_p = subparsers.add_parser("approve", help="Approve and execute remediation with post-rollout verification")
+    single_app_p.add_argument("approval_id", help="Pending Approval ID (e.g. appr-12345678)")
+    single_app_p.add_argument("--operator", default="local-sre", help="Operator identity for authorization audit")
+    single_app_p.add_argument("--reason", default=None, help="Approval justification")
+    single_app_p.add_argument("--json", action="store_true", help="Output execution summary as raw JSON")
+    single_app_p.set_defaults(func=handle_operator_approve)
+
+    serve_p = subparsers.add_parser("serve", help="Launch SRE Operator Console Web UI and REST API")
+    serve_p.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    serve_p.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    serve_p.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
+    serve_p.set_defaults(func=handle_serve)
+
+    ui_p = subparsers.add_parser("ui", help="Alias for 'serve' to launch SRE Web Console")
+    ui_p.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    ui_p.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    ui_p.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
+    ui_p.set_defaults(func=handle_serve)
+
     # 1. Investigate command
     inv_parser = subparsers.add_parser("investigate", help="Run AI incident investigation")
     inv_parser.add_argument("--namespace", default="demo", help="Kubernetes namespace")
     inv_parser.add_argument("--workload", default="demo-app", help="Workload name")
     inv_parser.add_argument("--incident", default=None, help="Incident description")
-    inv_parser.add_argument("--provider", choices=["mock", "gemini", "openai"], default="mock")
+    inv_parser.add_argument("--provider", choices=["mock", "gemini", "openai", "ollama"], default="mock")
     inv_parser.add_argument("--model", default=None, help="Specific LLM model name")
     inv_parser.add_argument("--json", action="store_true", help="Output RCA as raw JSON")
     inv_parser.set_defaults(func=handle_investigate)

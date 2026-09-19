@@ -13,10 +13,16 @@ DEMO_APP_URL = "http://localhost:30080"
 def reset_cluster():
     # Reset before test
     subprocess.run(["./scripts/trigger-incident.sh", "reset"], check=True, capture_output=True)
-    time.sleep(2)
+    for _ in range(5):
+        try:
+            requests.get("http://localhost:30080/ready", timeout=2)
+        except Exception:
+            pass
+    time.sleep(3)
     yield
     # Reset after test
     subprocess.run(["./scripts/trigger-incident.sh", "reset"], check=True, capture_output=True)
+    time.sleep(2)
 
 
 def test_investigate_high_error_rate_scenario():

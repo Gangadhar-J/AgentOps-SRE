@@ -1,4 +1,4 @@
-.PHONY: all setup start stop status test test-infra test-scenarios test-all eval eval-all eval-baseline eval-gate demo investigate clean preflight help
+.PHONY: all setup start stop status test test-infra test-scenarios test-api test-all eval eval-all eval-baseline eval-gate demo investigate incident ui serve clean preflight help
 
 SHELL := /bin/bash
 CLUSTER_NAME ?= agentops
@@ -6,12 +6,16 @@ CLUSTER_NAME ?= agentops
 all: help
 
 help:
-	@echo "AgentOps-SRE (v0.6) - Available Make Targets:"
+	@echo "AgentOps-SRE (v0.7) - Available Make Targets:"
 	@echo "  make setup          - Run preflight, spin up cluster, deploy observability stack & demo app"
 	@echo "  make start          - Start / ensure cluster and all workloads are running"
 	@echo "  make stop           - Teardown Kind cluster"
 	@echo "  make status         - Show status of cluster nodes, pods, and service URLs"
-	@echo "  make test           - Run local Python unit tests (schemas, clients, models, security guards, evaluators)"
+	@echo "  make ui             - Launch SRE Operator Console Web UI on http://127.0.0.1:8000"
+	@echo "  make serve          - Run AgentOps Web UI & REST API server"
+	@echo "  make incident       - Run single-command SRE incident investigation & recommendation"
+	@echo "  make test           - Run local Python unit tests"
+	@echo "  make test-api       - Run REST API & Operator workflow unit tests"
 	@echo "  make test-infra     - Run end-to-end infrastructure & MCP pipeline integration tests"
 	@echo "  make test-scenarios - Run full agent incident investigation scenarios against live cluster"
 	@echo "  make test-all       - Run all test suites"
@@ -23,6 +27,7 @@ help:
 	@echo "  make demo           - Run incident reproduction demo"
 	@echo "  make preflight      - Verify local host environment dependencies"
 	@echo "  make clean          - Remove virtualenv and temporary caches"
+
 
 preflight:
 	@./scripts/preflight.sh
@@ -65,6 +70,9 @@ status:
 test:
 	@uv run pytest tests/test_demo_app.py tests/unit/ -v
 
+test-api:
+	@uv run pytest tests/unit/test_operator_api.py tests/unit/test_real_operator_console.py tests/unit/test_incident_workflow.py tests/unit/test_operator_cli.py -v
+
 test-infra:
 	@uv run pytest tests/test_infrastructure.py tests/integration/ -v
 
@@ -84,6 +92,14 @@ eval-baseline:
 
 eval-gate:
 	@uv run python -m agentops.cli eval gate --mode replay --provider mock
+
+ui: serve
+
+serve:
+	@uv run python -m agentops.cli serve --host 127.0.0.1 --port 8000
+
+incident:
+	@uv run python -m agentops.cli incident demo/demo-app
 
 investigate:
 	@uv run python -m agentops.cli investigate --namespace demo --workload demo-app
