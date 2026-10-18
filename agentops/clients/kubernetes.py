@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
 import json
 import logging
+import os
+from pathlib import Path
 import subprocess
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from agentops.config import settings
 
@@ -12,7 +14,7 @@ logger = logging.getLogger("agentops.kubernetes")
 class KubernetesInvestigationClient:
     """
     STRICTLY READ-ONLY Kubernetes Client for incident investigation.
-    
+
     Security Guarantee:
     This client exclusively implements inspection methods ('get' and 'list').
     It exposes ZERO mutation, write, patch, scale, restart, delete, or exec methods.
@@ -25,8 +27,20 @@ class KubernetesInvestigationClient:
         """
         Internal helper executing strictly validated read-only kubectl commands.
         """
-        if len(args) < 2 or args[0] != "kubectl" or args[1] not in ("get", "version", "cluster-info"):
+        if len(args) < 2 or args[0] != "kubectl":
             raise PermissionError(f"Unauthorized command rejected by read-only security boundary: {args}")
+
+        subcmd = args[1]
+        if subcmd not in ("get", "version", "cluster-info", "config"):
+            raise PermissionError(f"Unauthorized command rejected by read-only security boundary: {args}")
+
+        if subcmd == "config":
+            if len(args) < 3 or args[2] not in ("current-context", "view"):
+                raise PermissionError(f"Unauthorized kubectl config operation: {args}")
+
+        env = os.environ.copy()
+        if settings.KUBECONFIG_PATH and Path(settings.KUBECONFIG_PATH).exists():
+            env["KUBECONFIG"] = str(settings.KUBECONFIG_PATH)
 
         try:
             res = subprocess.run(
@@ -35,6 +49,7 @@ class KubernetesInvestigationClient:
                 text=True,
                 timeout=self.timeout,
                 check=True,
+                env=env,
             )
             if "-o" in args and "json" in args:
                 return json.loads(res.stdout)
@@ -53,47 +68,106 @@ class KubernetesInvestigationClient:
         except Exception:
             return False
 
+    def get_auth_mode(self) -> str:
+        """Report active Kubernetes authentication mechanism."""
+        if Path("/var/run/secrets/kubernetes.io/serviceaccount").exists() or "KUBERNETES_SERVICE_HOST" in os.environ:
+            return "IN_CLUSTER"
+        if os.getenv("KUBECONFIG"):
+            return "KUBECONFIG_ENV"
+        if settings.KUBECONFIG_PATH and Path(settings.KUBECONFIG_PATH).exists():
+            return "KUBECONFIG_FILE"
+        return "DEFAULT"
+
+    def get_nodes(self) -> List[Dict[str, Any]]:
+        """Discover cluster nodes and readiness conditions (Read-Only)."""
+        data = self._run_read_only_cmd(["kubectl", "get", "nodes", "-o", "json"])
+        items = data.get("items", [])
+        nodes = []
+        for n in items:
+            meta = n.get("metadata", {})
+            status = n.get("status", {})
+            conditions = status.get("conditions", [])
+            ready_cond = next((c for c in conditions if c.get("type") == "Ready"), {})
+            is_ready = ready_cond.get("status") == "True"
+            node_info = status.get("nodeInfo", {})
+            nodes.append({
+                "name": meta.get("name"),
+                "ready": is_ready,
+                "condition_reason": ready_cond.get("reason", "Unknown"),
+                "kubelet_version": node_info.get("kubeletVersion", "unknown"),
+                "os_image": node_info.get("osImage", "unknown"),
+                "architecture": node_info.get("architecture", "unknown"),
+            })
+        return nodes
+
+    def get_cluster_overview(self) -> Dict[str, Any]:
+        """Aggregate high-level cluster health, context, and topology."""
+        auth_mode = self.get_auth_mode()
+        connected = False
+        nodes = []
+        namespaces = []
+        context_name = "unknown"
+        error = None
+
+        try:
+            nodes = self.get_nodes()
+            namespaces = self.get_namespaces()
+            connected = True
+            try:
+                ctx_data = self._run_read_only_cmd(["kubectl", "config", "current-context"])
+                context_name = ctx_data.get("raw_output", "unknown").strip()
+            except Exception:
+                context_name = "connected-cluster"
+        except Exception as e:
+            error = str(e)
+
+        return {
+            "connected": connected,
+            "auth_mode": auth_mode,
+            "current_context": context_name,
+            "nodes_count": len(nodes),
+            "nodes_ready": sum(1 for n in nodes if n.get("ready")),
+            "nodes": nodes,
+            "namespaces_count": len(namespaces),
+            "namespaces": namespaces,
+            "error": error,
+        }
+
     def get_namespaces(self) -> List[str]:
         """
         Discover active cluster namespaces (Read-Only).
+        Raises exception if cluster query fails.
         """
-        try:
-            data = self._run_read_only_cmd(["kubectl", "get", "namespaces", "-o", "json"])
-            items = data.get("items", [])
-            return [
-                ns.get("metadata", {}).get("name")
-                for ns in items
-                if ns.get("metadata", {}).get("name")
-            ]
-        except Exception as e:
-            logger.error(f"Failed to discover namespaces: {str(e)}")
-            return []
+        data = self._run_read_only_cmd(["kubectl", "get", "namespaces", "-o", "json"])
+        items = data.get("items", [])
+        return [
+            ns.get("metadata", {}).get("name")
+            for ns in items
+            if ns.get("metadata", {}).get("name")
+        ]
 
     def get_deployments(self, namespace: str) -> List[Dict[str, Any]]:
         """
         Discover active deployments in a namespace (Read-Only).
+        Raises exception if cluster query fails.
         """
-        try:
-            data = self._run_read_only_cmd(["kubectl", "get", "deployments", "-n", namespace, "-o", "json"])
-            items = data.get("items", [])
-            deployments = []
-            for dep in items:
-                meta = dep.get("metadata", {})
-                spec = dep.get("spec", {})
-                status = dep.get("status", {})
-                deployments.append({
-                    "name": meta.get("name"),
-                    "namespace": namespace,
-                    "desired_replicas": spec.get("replicas", 0),
-                    "ready_replicas": status.get("readyReplicas", 0),
-                    "available_replicas": status.get("availableReplicas", 0),
-                    "updated_replicas": status.get("updatedReplicas", 0),
-                    "created_at": meta.get("creationTimestamp"),
-                })
-            return deployments
-        except Exception as e:
-            logger.error(f"Failed to discover deployments in namespace '{namespace}': {str(e)}")
-            return []
+        data = self._run_read_only_cmd(["kubectl", "get", "deployments", "-n", namespace, "-o", "json"])
+        items = data.get("items", [])
+        deployments = []
+        for dep in items:
+            meta = dep.get("metadata", {})
+            spec = dep.get("spec", {})
+            status = dep.get("status", {})
+            deployments.append({
+                "name": meta.get("name"),
+                "namespace": namespace,
+                "desired_replicas": spec.get("replicas", 0),
+                "ready_replicas": status.get("readyReplicas", 0),
+                "available_replicas": status.get("availableReplicas", 0),
+                "updated_replicas": status.get("updatedReplicas", 0),
+                "created_at": meta.get("creationTimestamp"),
+            })
+        return deployments
 
     def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[Dict[str, Any]]:
         cmd = ["kubectl", "get", "pods", "-n", namespace, "-o", "json"]
@@ -113,7 +187,7 @@ class KubernetesInvestigationClient:
         dep = self.get_deployment(name, namespace)
         if not dep:
             return {"found": False, "deployment": name, "namespace": namespace}
-        
+
         status = dep.get("status", {})
         spec = dep.get("spec", {})
         return {
@@ -140,7 +214,7 @@ class KubernetesInvestigationClient:
             metadata = pod.get("metadata", {})
             status = pod.get("status", {})
             container_statuses = status.get("containerStatuses", [])
-            
+
             restarts = 0
             is_ready = False
             state_reason = "Running"
@@ -151,7 +225,7 @@ class KubernetesInvestigationClient:
                 restarts += cs.get("restartCount", 0)
                 if cs.get("ready"):
                     is_ready = True
-                
+
                 state = cs.get("state", {})
                 if "waiting" in state:
                     state_reason = state["waiting"].get("reason", "Waiting")
@@ -195,10 +269,8 @@ class KubernetesInvestigationClient:
                     continue
 
                 ts_str = item.get("lastTimestamp") or item.get("eventTime") or ""
-                # Check timestamp freshness if available
                 if ts_str:
                     try:
-                        # Parse ISO 8601
                         dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                         if (now_ts - dt.timestamp()) > lookback_seconds:
                             continue

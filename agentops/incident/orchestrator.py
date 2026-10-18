@@ -5,11 +5,19 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 from agentops.agent.investigator import SREAgent
+from agentops.config import settings
+from agentops.incident.models import (
+    EvidenceDetail,
+    IncidentReport,
+    IncidentSource,
+    LLMRuntime,
+    RemediationExecutionSummary,
+)
 from agentops.llm.base import BaseLLMProvider
+from agentops.llm.exceptions import ProviderUnavailableError
 from agentops.llm.gemini import GeminiLLMProvider
 from agentops.llm.mock_provider import MockRuleBasedLLMProvider
 from agentops.llm.openai_provider import OpenAILLMProvider
-from agentops.config import settings
 from agentops.models.rca import IncidentType, RootCauseAnalysis
 from agentops.observability.tracing import start_span
 from agentops.security.approval import ApprovalManager
@@ -20,16 +28,14 @@ from agentops.security.identity import AgentIdentity
 from agentops.security.operator import OperatorIdentity
 from agentops.security.requests import ActionRequest, ActionTarget
 
-from agentops.incident.models import EvidenceDetail, IncidentReport, IncidentSource, LLMRuntime, RemediationExecutionSummary
-
 logger = logging.getLogger("agentops.incident")
 
 
 class IncidentWorkflowManager:
     """
-    High-Level Incident Workflow Orchestrator for SRE Operators.
-    Exposes unified investigation, policy risk evaluation, human approval,
-    and post-remediation rollout verification without bypassing SecurityGateway.
+    Unified incident orchestrator enforcing:
+    Investigation -> RCA Validation -> Policy -> Approval -> Gateway -> Remediation -> Verification.
+    Never allows unvalidated or failed LLM outputs to generate actionable approvals.
     """
 
     def __init__(
@@ -43,24 +49,33 @@ class IncidentWorkflowManager:
         self._last_execution: Optional[RemediationExecutionSummary] = None
 
     def _get_provider(self, provider_name: str, model_name: Optional[str] = None) -> BaseLLMProvider:
-        if provider_name == "gemini":
+        p = (provider_name or "ollama").lower().strip()
+        if p == "gemini":
             return GeminiLLMProvider(model_name=model_name or "gemini-2.5-pro")
-        elif provider_name == "openai":
+        elif p == "openai":
             return OpenAILLMProvider(model_name=model_name or "gpt-4o")
-        elif provider_name == "ollama":
-            return OpenAILLMProvider(base_url=f"{settings.OLLAMA_URL}/v1", model_name=model_name or "qwen3.5:2b")
-        else:
+        elif p == "ollama":
+            return OpenAILLMProvider(base_url=f"{settings.OLLAMA_URL.rstrip('/')}/v1", model_name=model_name or "qwen3.5:2b")
+        elif p == "mock":
+            # Reserved strictly for offline replay benchmarks and isolated tests
             return MockRuleBasedLLMProvider(model_name=model_name or "deterministic-rule-engine-v1")
+        else:
+            raise ProviderUnavailableError(
+                f"Unsupported LLM provider '{provider_name}'. Supported providers: 'ollama', 'gemini', 'openai'.",
+                provider=provider_name,
+                model=model_name or "unknown",
+            )
 
     def _map_rca_to_action(
         self,
         incident_type: IncidentType,
         workload: str,
         namespace: str,
-        rca: RootCauseAnalysis,
+        rca: Optional[RootCauseAnalysis] = None,
     ) -> tuple[str, str, Dict[str, Any]]:
         """
         Map RootCauseAnalysis to a concrete policy-governed remediation action.
+        Fails closed on Unknown or unmapped incident types.
         Returns: (action_name, human_readable_recommendation, target_parameters)
         """
         itype_val = incident_type.value if hasattr(incident_type, "value") else str(incident_type)
@@ -90,9 +105,10 @@ class IncidentWorkflowManager:
                 {},
             )
         else:
+            # FAIL CLOSED: Unknown incident types must never default to restart!
             return (
-                "k8s.remediation.restart_deployment",
-                f"Restart deployment {namespace}/{workload}",
+                "none",
+                f"No automated action authorized for incident type '{itype_val}'. Manual SRE intervention required.",
                 {},
             )
 
@@ -101,14 +117,14 @@ class IncidentWorkflowManager:
         namespace: str = "demo",
         workload: str = "demo-app",
         incident_description: Optional[str] = None,
-        provider_name: str = "mock",
+        provider_name: str = "ollama",
         model_name: Optional[str] = None,
         dry_run: bool = False,
         source: IncidentSource = "MANUAL",
     ) -> IncidentReport:
         """
-        Run end-to-end investigation, produce RCA, evaluate security policy,
-        and generate pending approval if required.
+        Run end-to-end investigation, produce RCA, independently validate evidence references,
+        evaluate security policy, and generate pending approval if required and permitted.
         """
         start_time = time.time()
         incident_id = f"inc-{uuid.uuid4().hex[:8]}"
@@ -151,8 +167,10 @@ class IncidentWorkflowManager:
 
             # Capture Provider-Neutral LLM Runtime Telemetry
             llm_runtime = None
+            has_errors = False
             if rca and rca.agent_metrics:
                 m = rca.agent_metrics
+                has_errors = bool(m.errors)
                 p_tok = m.prompt_tokens
                 c_tok = m.completion_tokens
                 tot_tok = (p_tok + c_tok) if (p_tok is not None and c_tok is not None) else None
@@ -162,14 +180,8 @@ class IncidentWorkflowManager:
                 actual_provider = m.llm_provider if (m.llm_provider and m.llm_provider != "unknown") else provider_name
                 actual_model = m.llm_model if (m.llm_model and m.llm_model != "unknown") else (model_name or provider_name)
 
-                is_fallback = bool(m.errors) or (provider_name != "mock" and actual_provider == "mock")
-                if is_fallback:
-                    mode_str = "rule-engine (fallback)"
-                    err_hint = m.errors[0] if m.errors else "Primary provider failed"
-                    status_str = f"FALLBACK ({err_hint[:50]})"
-                else:
-                    mode_str = "local" if actual_provider == "ollama" else ("rule-engine" if actual_provider == "mock" else "cloud")
-                    status_str = "READY"
+                mode_str = "local" if actual_provider == "ollama" else ("rule-engine" if actual_provider == "mock" else "cloud")
+                status_str = f"FAILED ({m.error_category or 'Error'})" if has_errors else "READY"
 
                 llm_runtime = LLMRuntime(
                     provider=actual_provider,
@@ -180,7 +192,12 @@ class IncidentWorkflowManager:
                     completion_tokens=c_tok,
                     total_tokens=tot_tok,
                     tokens_per_second=tps,
+                    time_to_first_token=m.time_to_first_token,
                     status=status_str,
+                    error_category=m.error_category,
+                    schema_validated=m.schema_validated,
+                    evidence_validated=m.evidence_validated,
+                    trace_id=incident_id,
                 )
 
             # Map RCA to policy-governed remediation action
@@ -191,79 +208,97 @@ class IncidentWorkflowManager:
                 rca=rca,
             )
 
-            # Create standard ActionRequest
-            action_req_id = f"req-{uuid.uuid4().hex[:8]}"
-            target = ActionTarget(
-                namespace=namespace,
-                resource_type="deployment",
-                resource_name=workload,
-                parameters=params,
-            )
-            reason_text = rca.root_cause
-            if len(reason_text.strip()) < 10:
-                reason_text = f"Controlled remediation for incident in {namespace}/{workload}"
-
-            action_request = ActionRequest(
-                request_id=action_req_id,
-                action=action_name,
-                target=target,
-                reason=reason_text,
-                evidence_refs=rca.evidence_ids if rca.evidence_ids else ["E001"],
+            is_valid_inference = (
+                not has_errors
+                and getattr(rca, "validation_passed", False)
+                and rca.confidence > 0.0
+                and rca.incident_type != IncidentType.UNKNOWN
             )
 
-            # Build Security Context with granted capabilities for target resource
-            identity = AgentIdentity(agent_id="sre-agent-primary", agent_type="ai_agent", version="0.7.1")
-            allowed_ns = list(set(["demo", namespace]))
-            allowed_res = list(set(["demo-app", workload]))
-            caps = (
-                Capability(
-                    name="k8s.remediation.restart_deployment",
-                    resource="deployment",
-                    constraints=CapabilityConstraints(namespaces=allowed_ns, allowed_resources=allowed_res),
-                ),
-                Capability(
-                    name="k8s.remediation.scale_deployment",
-                    resource="deployment",
-                    constraints=CapabilityConstraints(namespaces=allowed_ns, allowed_resources=allowed_res, max_replicas=10),
-                ),
-                Capability(
-                    name="k8s.remediation.rollback_deployment",
-                    resource="deployment",
-                    constraints=CapabilityConstraints(namespaces=allowed_ns, allowed_resources=allowed_res),
-                ),
-            )
-            sec_ctx = SecurityContext(identity=identity, capabilities=caps, request_id=action_req_id)
-
-            # Policy & Gateway Evaluation
             policy_decision_str = "ALLOW"
             policy_reason = None
             risk_level = "LOW"
             approval_required = False
             approval_id = None
+            action_req_id = None
             status = "INVESTIGATED"
 
-            if dry_run:
-                # In dry-run mode: evaluate policy without creating persistent approvals or mutations
-                eval_dec = self.gateway.policy_engine.evaluate(sec_ctx, action_request)
-                policy_decision_str = eval_dec.decision
-                policy_reason = eval_dec.reason
-                risk_level = eval_dec.risk_level
-                approval_required = (eval_dec.decision == "REQUIRE_APPROVAL")
-                status = "DRY_RUN_EVALUATED"
+            if not is_valid_inference:
+                status = "FAILED"
+                policy_decision_str = "NOT_EVALUATED"
+                err_desc = m.errors[0] if (rca and rca.agent_metrics and rca.agent_metrics.errors) else "RCA schema or evidence validation failed"
+                policy_reason = f"Investigation did not produce a validated RCA ({err_desc})"
+                risk_level = "NONE"
+                rec_text = "No automated remediation permitted due to failed or unvalidated investigation."
+                action_name = "none"
+            elif action_name == "none":
+                status = "INVESTIGATED_NO_ACTION"
+                policy_decision_str = "DENY"
+                policy_reason = f"No automated remediation authorized for incident type '{rca.incident_type}'"
+                risk_level = "LOW"
             else:
-                decision, _, approval = self.gateway.execute_action(sec_ctx, action_request)
-                policy_decision_str = decision.decision
-                policy_reason = decision.reason
-                risk_level = decision.risk_level
+                action_req_id = f"req-{uuid.uuid4().hex[:8]}"
+                target = ActionTarget(
+                    namespace=namespace,
+                    resource_type="deployment",
+                    resource_name=workload,
+                    parameters=params,
+                )
+                reason_text = rca.root_cause
+                if len(reason_text.strip()) < 10:
+                    reason_text = f"Controlled remediation for incident in {namespace}/{workload}"
 
-                if decision.decision == "REQUIRE_APPROVAL":
-                    approval_required = True
-                    approval_id = approval.approval_id if approval else None
-                    status = "PENDING_APPROVAL"
-                elif decision.decision == "DENY":
-                    status = "BLOCKED"
+                action_request = ActionRequest(
+                    request_id=action_req_id,
+                    action=action_name,
+                    target=target,
+                    reason=reason_text,
+                    evidence_refs=rca.evidence_ids if rca.evidence_ids else ["E001"],
+                )
+
+                identity = AgentIdentity(agent_id="sre-agent-primary", agent_type="ai_agent", version="0.7.2")
+                allowed_ns = list(set(["demo", namespace]))
+                allowed_res = list(set(["demo-app", workload]))
+                caps = (
+                    Capability(
+                        name="k8s.remediation.restart_deployment",
+                        resource="deployment",
+                        constraints=CapabilityConstraints(namespaces=allowed_ns, allowed_resources=allowed_res),
+                    ),
+                    Capability(
+                        name="k8s.remediation.scale_deployment",
+                        resource="deployment",
+                        constraints=CapabilityConstraints(namespaces=allowed_ns, allowed_resources=allowed_res, max_replicas=10),
+                    ),
+                    Capability(
+                        name="k8s.remediation.rollback_deployment",
+                        resource="deployment",
+                        constraints=CapabilityConstraints(namespaces=allowed_ns, allowed_resources=allowed_res),
+                    ),
+                )
+                sec_ctx = SecurityContext(identity=identity, capabilities=caps, request_id=action_req_id)
+
+                if dry_run:
+                    eval_dec = self.gateway.policy_engine.evaluate(sec_ctx, action_request)
+                    policy_decision_str = eval_dec.decision
+                    policy_reason = eval_dec.reason
+                    risk_level = eval_dec.risk_level
+                    approval_required = (eval_dec.decision == "REQUIRE_APPROVAL")
+                    status = "DRY_RUN_EVALUATED"
                 else:
-                    status = "AUTHORIZED"
+                    decision, _, approval = self.gateway.execute_action(sec_ctx, action_request)
+                    policy_decision_str = decision.decision
+                    policy_reason = decision.reason
+                    risk_level = decision.risk_level
+
+                    if decision.decision == "REQUIRE_APPROVAL":
+                        approval_required = True
+                        approval_id = approval.approval_id if approval else None
+                        status = "PENDING_APPROVAL"
+                    elif decision.decision == "DENY":
+                        status = "BLOCKED"
+                    else:
+                        status = "AUTHORIZED"
 
             duration = round(time.time() - start_time, 2)
             report = IncidentReport(
@@ -277,8 +312,10 @@ class IncidentWorkflowManager:
                 summary=rca.summary,
                 root_cause=rca.root_cause,
                 llm_runtime=llm_runtime,
+                validation_passed=getattr(rca, "validation_passed", is_valid_inference),
                 evidence_summary=evidence_summary,
                 evidence_items=evidence_items,
+                missing_signals=getattr(rca, "missing_signals", []),
                 recommended_remediation=rec_text,
                 recommended_action=action_name,
                 risk_level=risk_level,
@@ -299,22 +336,16 @@ class IncidentWorkflowManager:
         operator_name: str = "local-sre",
         reason: str = "Operator validated RCA and authorized remediation",
     ) -> RemediationExecutionSummary:
-        """
-        Authorize a pending approval and execute the remediation through SecurityGateway.
-        Performs single-use token validation, mutation, and post-verification.
-        """
         approval = self.approval_manager.get_approval(approval_id)
         if not approval:
             raise ValueError(f"Approval request '{approval_id}' not found")
 
         with start_span("agent.incident.execution", attributes={"approval.id": approval_id, "operator": operator_name}):
-            # 1. Authorize via ApprovalManager
             operator = OperatorIdentity(operator_id=operator_name, display_name=operator_name.title())
             self.approval_manager.approve(approval_id, operator, reason=reason)
 
-            # 2. Reconstruct SecurityContext with agent identity
             action_request = approval.action_request
-            identity = AgentIdentity(agent_id="sre-agent-primary", agent_type="ai_agent", version="0.7.1")
+            identity = AgentIdentity(agent_id="sre-agent-primary", agent_type="ai_agent", version="0.7.2")
             target_ns = action_request.target.namespace
             target_res = action_request.target.resource_name
             allowed_ns = list(set(["demo", target_ns]))
@@ -338,14 +369,12 @@ class IncidentWorkflowManager:
             )
             sec_ctx = SecurityContext(identity=identity, capabilities=caps, request_id=action_request.request_id)
 
-            # 3. Controlled Execution via SecurityGateway
             rem_result = self.gateway.execute_remediation(
                 security_context=sec_ctx,
                 action_request=action_request,
                 approval_id=approval_id,
             )
 
-            # 4. Extract verification outcomes
             post_verif = rem_result.post_verification
             rollout_status = "NOT_APPLICABLE"
             ready_reps = None
@@ -378,7 +407,6 @@ class IncidentWorkflowManager:
 
             self._last_execution = summary
             if self._active_incident and self._active_incident.approval_id == approval_id:
-                # Update in-memory active incident status
                 object.__setattr__(self._active_incident, "status", resolution_status)
 
             return summary
@@ -389,7 +417,6 @@ class IncidentWorkflowManager:
         operator_name: str = "local-sre",
         reason: str = "Remediation rejected by operator",
     ) -> Dict[str, Any]:
-        """Reject a pending approval without infrastructure mutation."""
         operator = OperatorIdentity(operator_id=operator_name, display_name=operator_name.title())
         rejection = self.approval_manager.reject(approval_id, operator, reason=reason)
         if self._active_incident and self._active_incident.approval_id == approval_id:
@@ -412,3 +439,7 @@ class IncidentWorkflowManager:
     def get_pending_approvals(self) -> List[Dict[str, Any]]:
         approvals = self.approval_manager.list_pending()
         return [a.model_dump() for a in approvals]
+
+
+# Alias for backwards compatibility
+IncidentOrchestrator = IncidentWorkflowManager

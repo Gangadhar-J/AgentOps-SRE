@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgentOps SRE — Real Operator Console</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <title>AgentOps SRE — Unified Operator &amp; Observability Console</title>
+  <link rel="stylesheet" href="/static/styles.css?v=0.7.2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -17,7 +17,7 @@
         <div class="brand-logo">🛡️</div>
         <div>
           <div class="brand-title">AgentOps SRE</div>
-          <div class="brand-subtitle">Autonomous Incident Remediation & Control Gateway (v0.7.1)</div>
+          <div class="brand-subtitle">Operator Console &amp; Autonomous Control Gateway (v0.7.2)</div>
         </div>
       </div>
       <div class="nav-status">
@@ -34,409 +34,833 @@
           <span class="badge-icon">🦙</span> Ollama: --
         </div>
         <div id="evalBadge" class="badge badge-info" title="Deterministic Benchmark Eval Gate">
-          <span class="badge-icon">📊</span> Eval: --
+          <span class="badge-icon">📊</span> Eval: 96.5%
         </div>
         <div id="incidentBadge" class="badge badge-idle" title="System Incident State">
           <span class="dot"></span> Standby
         </div>
+        <button id="btnChaosModal" class="btn-chaos-toggle" onclick="toggleChaosDrawer()" title="Open Demo Chaos Playground">
+          ⚡ Chaos Sandbox
+        </button>
       </div>
     </header>
 
-    <!-- Mode Switcher Tab Bar -->
-    <div class="mode-switcher-bar">
-      <div class="mode-tabs">
-        <button id="tabRealMode" class="mode-tab active" onclick="switchMode('real')">
-          <span class="mode-tab-icon">🛡️</span>
-          <span class="mode-tab-label">Real Operations Mode</span>
-          <span class="mode-tab-pill">Production Ready</span>
+    <!-- Unified Operator Navigation Bar (8 Sections) -->
+    <nav class="console-nav-bar">
+      <div class="nav-tabs">
+        <button id="navTabOverview" class="console-nav-tab active" onclick="switchSection('overview')">
+          <span class="tab-icon">📊</span>
+          <span class="tab-label">Overview</span>
         </button>
-        <button id="tabDemoMode" class="mode-tab" onclick="switchMode('demo')">
-          <span class="mode-tab-icon">⚡</span>
-          <span class="mode-tab-label">Demo &amp; Chaos Playground</span>
-          <span class="mode-tab-pill pill-amber">Sandbox</span>
+        <button id="navTabCluster" class="console-nav-tab" onclick="switchSection('cluster')">
+          <span class="tab-icon">☸️</span>
+          <span class="tab-label">Cluster &amp; Workloads</span>
+        </button>
+        <button id="navTabInvestigation" class="console-nav-tab" onclick="switchSection('investigation')">
+          <span class="tab-icon">🔍</span>
+          <span class="tab-label">Incident Investigation</span>
+        </button>
+        <button id="navTabLLM" class="console-nav-tab" onclick="switchSection('llm')">
+          <span class="tab-icon">🤖</span>
+          <span class="tab-label">LLM Observability</span>
+        </button>
+        <button id="navTabEvidence" class="console-nav-tab" onclick="switchSection('evidence')">
+          <span class="tab-icon">🔎</span>
+          <span class="tab-label">Evidence Explorer</span>
+        </button>
+        <button id="navTabApprovals" class="console-nav-tab" onclick="switchSection('approvals')">
+          <span class="tab-icon">🛡️</span>
+          <span class="tab-label">Approvals &amp; Remediation</span>
+          <span id="pendingApprovalsPill" class="badge-count" style="display:none;">0</span>
+        </button>
+        <button id="navTabEvaluation" class="console-nav-tab" onclick="switchSection('evaluation')">
+          <span class="tab-icon">📈</span>
+          <span class="tab-label">Evaluation &amp; Regression</span>
+        </button>
+        <button id="navTabDiagnostics" class="console-nav-tab" onclick="switchSection('diagnostics')">
+          <span class="tab-icon">🩺</span>
+          <span class="tab-label">Platform Diagnostics</span>
         </button>
       </div>
-      <div class="mode-hint" id="modeHintText">
-        Direct cluster observability &amp; autonomous diagnostic for real Kubernetes workloads.
+    </nav>
+
+    <!-- SECTION 1: OVERVIEW -->
+    <main id="sectionOverview" class="console-section active">
+      <div class="overview-grid">
+        <!-- Live Cluster Health Card -->
+        <div class="card overview-card">
+          <div class="card-header">
+            <h3>☸️ Cluster Infrastructure</h3>
+            <span id="overviewK8sStatus" class="status-pill status-healthy">CONNECTED</span>
+          </div>
+          <div class="metric-row">
+            <div class="metric-block">
+              <span class="metric-label">Context</span>
+              <span id="overviewContextName" class="metric-val mono">--</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">Auth Mode</span>
+              <span id="overviewAuthMode" class="metric-val mono">--</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">Nodes Ready</span>
+              <span id="overviewNodesReady" class="metric-val">--</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">Namespaces</span>
+              <span id="overviewNsCount" class="metric-val">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Telemetry Services Health Card -->
+        <div class="card overview-card">
+          <div class="card-header">
+            <h3>📡 Telemetry Health</h3>
+            <span class="status-pill status-healthy">3 / 3 CONNECTED</span>
+          </div>
+          <div class="metric-row">
+            <div class="metric-block">
+              <span class="metric-label">Prometheus</span>
+              <span id="overviewPromStatus" class="metric-val mono">Checking</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">Loki</span>
+              <span id="overviewLokiStatus" class="metric-val mono">Checking</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">Grafana</span>
+              <span id="overviewGrafanaStatus" class="metric-val mono">Checking</span>
+            </div>
+            <div class="metric-block">
+              <span class="metric-label">Ollama Models</span>
+              <span id="overviewOllamaCount" class="metric-val mono">--</span>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
 
-    <!-- Main Content Grid -->
-    <main class="main-grid">
-      <!-- Left Column: Operator Dispatch & Observability -->
-      <section class="panel console-panel">
+      <!-- Live Workload Telemetry Pulse -->
+      <div class="card mt-4">
+        <div class="card-header">
+          <div>
+            <h3>Live Telemetry Pulse: <span id="pulseTargetLabel" class="text-accent">demo/demo-app</span></h3>
+            <p class="card-subtitle">Real-time non-mutating metric snapshot collected directly from cluster.</p>
+          </div>
+          <div class="flex-actions">
+            <span id="pulseBadge" class="pulse-badge pulse-healthy">HEALTHY</span>
+            <button class="btn-sm btn-secondary" onclick="fetchTelemetryPulse()">🔄 Refresh Pulse</button>
+          </div>
+        </div>
+        <div class="telemetry-meters-grid">
+          <div class="meter-card">
+            <div class="meter-title">Ready Pods</div>
+            <div id="pulseReadyPods" class="meter-value">--</div>
+            <div class="meter-sub">Replicas</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Pod Restarts</div>
+            <div id="pulseRestarts" class="meter-value">--</div>
+            <div class="meter-sub">Total Failures</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">HTTP Error Rate</div>
+            <div id="pulseErrorRate" class="meter-value">--</div>
+            <div class="meter-sub">5xx Window (2m)</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">P95 Latency</div>
+            <div id="pulseLatency" class="meter-value">--</div>
+            <div class="meter-sub">HTTP Duration</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Max Memory</div>
+            <div id="pulseMemory" class="meter-value">--</div>
+            <div class="meter-sub">Resident Set</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">K8s Warnings</div>
+            <div id="pulseWarnings" class="meter-value">--</div>
+            <div class="meter-sub">Recent Events</div>
+          </div>
+        </div>
+      </div>
 
-        <!-- ==================== MODE A: REAL OPERATIONS ==================== -->
-        <div id="realOperationsView">
-          <div class="panel-intro">
-            <h2 class="panel-heading">🔍 Real Incident Investigation</h2>
-            <p class="panel-subheading">Live cluster diagnostic, instant telemetry pulse, and autonomous root-cause analysis.</p>
+      <!-- Recent Investigation Summary Card -->
+      <div class="card mt-4">
+        <div class="card-header">
+          <h3>📋 Active / Latest Incident</h3>
+          <span id="overviewActiveStatus" class="status-pill status-neutral">STANDBY</span>
+        </div>
+        <div id="overviewActiveBody" class="active-incident-body">
+          <p class="text-muted">No active incident under investigation. Navigate to <strong>Incident Investigation</strong> to trigger an autonomous analysis.</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 2: CLUSTER & WORKLOADS -->
+    <main id="sectionCluster" class="console-section">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>☸️ Kubernetes Cluster Topology &amp; Nodes</h3>
+            <p class="card-subtitle">Real node conditions and status reported by the Kubernetes API server.</p>
+          </div>
+          <button class="btn-sm btn-secondary" onclick="loadClusterOverview()">🔄 Refresh Nodes</button>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Node Name</th>
+                <th>Status</th>
+                <th>Condition</th>
+                <th>Kubelet Version</th>
+                <th>OS Image</th>
+                <th>Arch</th>
+              </tr>
+            </thead>
+            <tbody id="nodesTableBody">
+              <tr><td colspan="6" class="text-center text-muted">Loading cluster nodes...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Namespace & Workload Selector Card -->
+      <div class="card mt-4">
+        <div class="card-header">
+          <h3>📦 Workload Explorer</h3>
+          <div class="flex-actions">
+            <label for="clusterNsSelect" class="text-sm">Namespace:</label>
+            <select id="clusterNsSelect" onchange="onClusterNamespaceChange()">
+              <option value="demo" selected>demo</option>
+            </select>
+            <label for="clusterWlSelect" class="text-sm">Workload:</label>
+            <select id="clusterWlSelect" onchange="onClusterWorkloadChange()">
+              <option value="demo-app" selected>demo-app</option>
+            </select>
+            <button class="btn-sm btn-secondary" onclick="loadClusterWorkloadData()">🔄 Refresh</button>
+          </div>
+        </div>
+
+        <div class="workload-detail-grid mt-2">
+          <!-- Workload Pods Table -->
+          <div class="workload-pods-container">
+            <h4>Live Pod Replicas</h4>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Pod Name</th>
+                    <th>Phase</th>
+                    <th>Ready</th>
+                    <th>Restarts</th>
+                    <th>State Reason</th>
+                    <th>Termination</th>
+                  </tr>
+                </thead>
+                <tbody id="workloadPodsBody">
+                  <tr><td colspan="6" class="text-center text-muted">Select workload to view pods</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <form id="realInvestigateForm" class="form-grid" onsubmit="event.preventDefault(); startRealInvestigation();">
-            <!-- Dynamic Cluster Discovery Row -->
-            <div class="form-row">
-              <div class="form-group">
-                <div class="label-with-action">
-                  <label for="realNamespaceSelect">Namespace</label>
-                  <button type="button" class="btn-text-action" onclick="fetchNamespaces()" title="Refresh Namespaces">🔄 Refresh</button>
-                </div>
-                <select id="realNamespaceSelect" onchange="onNamespaceChange()">
-                  <option value="demo" selected>demo</option>
-                  <option value="default">default</option>
-                  <option value="kube-system">kube-system</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <div class="label-with-action">
-                  <label for="realWorkloadSelect">Workload / Deployment</label>
-                  <button type="button" class="btn-text-action" onclick="fetchWorkloads()" title="Refresh Workloads">🔄 Refresh</button>
-                </div>
-                <select id="realWorkloadSelect" onchange="onWorkloadChange()">
-                  <option value="demo-app" selected>demo-app</option>
-                </select>
-              </div>
+          <!-- Workload Warning Events Stream -->
+          <div class="workload-events-container">
+            <h4>Warning Events</h4>
+            <div id="workloadEventsStream" class="events-stream-box">
+              <p class="text-muted text-sm">No recent warning events detected.</p>
             </div>
+          </div>
+        </div>
+      </div>
+    </main>
 
-            <!-- AI Runtime & Model Selection Row -->
-            <div class="form-row">
+    <!-- SECTION 3: INCIDENT INVESTIGATION -->
+    <main id="sectionInvestigation" class="console-section">
+      <div class="investigation-layout-grid">
+        <!-- Investigation Controls Card -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3>🔍 Autonomous Incident Investigation</h3>
+              <p class="card-subtitle">Execute real multi-signal evidence collection and grounded LLM root-cause analysis.</p>
+            </div>
+          </div>
+
+          <form id="investigateForm" onsubmit="event.preventDefault(); startInvestigation();">
+            <div class="form-grid">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="invNamespaceSelect">Target Namespace</label>
+                  <select id="invNamespaceSelect" onchange="onInvNamespaceChange()">
+                    <option value="demo" selected>demo</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="invWorkloadSelect">Target Workload</label>
+                  <select id="invWorkloadSelect">
+                    <option value="demo-app" selected>demo-app</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- AI Runtime & Model Selection (Real AI Enforcement) -->
               <div class="form-group">
-                <label for="realModelSelect">AI Runtime &amp; Model</label>
-                <select id="realModelSelect">
-                  <option value="ollama:qwen3.5:2b" selected>Ollama &bull; qwen3.5:2b (Local 2B)</option>
-                  <option value="ollama:granite4.1:3b">Ollama &bull; granite4.1:3b (Local 3B)</option>
-                  <option value="mock:deterministic-evaluator">Mock &bull; Deterministic Fast SRE Engine</option>
+                <label for="invModelSelect">
+                  AI Runtime &amp; Model
+                  <span class="pill-info">No Mocks in Live Ops</span>
+                </label>
+                <select id="invModelSelect">
+                  <option value="" disabled selected>Discovering installed models...</option>
                 </select>
+                <p class="form-help-text">Real model required. Selected model tag will be validated against Ollama tags inventory prior to invocation.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="invDescriptionInput">Optional Incident Context / Alert Description</label>
+                <textarea id="invDescriptionInput" rows="2" placeholder="e.g. Alertmanager fired P1 HighErrorRate on /orders; containers cycling in CrashLoopBackOff"></textarea>
               </div>
 
               <div class="form-group checkbox-group">
-                <label class="checkbox-label" for="realDryRunCheck">
-                  <input type="checkbox" id="realDryRunCheck">
-                  <span>Dry Run (Evaluate policy &amp; risk only, no approval creation)</span>
+                <label class="checkbox-container">
+                  <input type="checkbox" id="invDryRunCheck">
+                  <span class="checkmark"></span>
+                  <strong>Dry Run Mode</strong> (Evaluate security policy &amp; risk only; no actionable approval created)
                 </label>
               </div>
-            </div>
 
-            <!-- Live Telemetry Pulse Card -->
-            <div class="pulse-card">
-              <div class="pulse-header">
-                <div class="pulse-title">
-                  <span class="pulse-icon">📡</span>
-                  <strong>Live Telemetry Pulse</strong>
-                  <span id="pulseTargetLabel" class="mono text-xs text-muted">demo/demo-app</span>
-                </div>
-                <div class="pulse-actions">
-                  <span id="pulseStatusBadge" class="badge badge-success">HEALTHY</span>
-                  <button type="button" class="btn-icon-action" onclick="pollTelemetryPulse()" title="Refresh Pulse">🔄</button>
-                </div>
-              </div>
-
-              <div class="pulse-grid">
-                <div class="pulse-metric">
-                  <span class="text-muted text-xs">Ready Pods</span>
-                  <strong id="pulseReadyPods">-- / --</strong>
-                </div>
-                <div class="pulse-metric">
-                  <span class="text-muted text-xs">Pod Restarts</span>
-                  <strong id="pulseRestarts">--</strong>
-                </div>
-                <div class="pulse-metric">
-                  <span class="text-muted text-xs">HTTP Error Rate</span>
-                  <strong id="pulseErrorRate">--%</strong>
-                </div>
-                <div class="pulse-metric">
-                  <span class="text-muted text-xs">P95 Latency</span>
-                  <strong id="pulseLatency">--s</strong>
-                </div>
-                <div class="pulse-metric">
-                  <span class="text-muted text-xs">Max Memory</span>
-                  <strong id="pulseMemory">-- MB</strong>
-                </div>
-                <div class="pulse-metric">
-                  <span class="text-muted text-xs">K8s Warnings</span>
-                  <strong id="pulseWarnings">0</strong>
-                </div>
-              </div>
-
-              <div id="pulseWarningBanner" class="pulse-warning-banner hidden">
-                <span class="pulse-warning-icon">⚠️</span>
-                <span id="pulseWarningText">Warning detected</span>
-              </div>
-
-              <!-- Deep Links -->
-              <div class="pulse-links">
-                <a id="promDeepLink" href="http://localhost:30090" target="_blank" class="deep-link">
-                  <span>📈 View in Prometheus</span> ↗
-                </a>
-                <a id="grafanaDeepLink" href="http://localhost:30300" target="_blank" class="deep-link">
-                  <span>📊 View in Grafana</span> ↗
-                </a>
+              <div class="form-actions">
+                <button type="submit" id="btnRunInvestigation" class="btn btn-primary btn-large">
+                  <span class="btn-icon">⚡</span> Run Autonomous Investigation
+                </button>
               </div>
             </div>
-
-            <button type="submit" id="realInvestigateBtn" class="btn btn-primary btn-lg">
-              <span id="realInvestigateSpinner" class="spinner hidden"></span>
-              <span id="realInvestigateBtnText">🔍 Investigate Real Workload</span>
-            </button>
           </form>
         </div>
 
-        <!-- ==================== MODE B: DEMO & CHAOS PLAYGROUND ==================== -->
-        <div id="demoPlaygroundView" class="hidden">
-          <div class="sandbox-banner">
-            <div class="sandbox-banner-icon">⚠️</div>
+        <!-- Investigation Results & RCA Panel -->
+        <div id="investigationResultsCard" class="card mt-4" style="display:none;">
+          <div class="card-header">
             <div>
-              <strong>DEMO &amp; CHAOS PLAYGROUND (Strict Sandbox Isolation)</strong>
-              <p class="text-xs">
-                Synthetic chaos injection is restricted strictly to namespace <code>demo</code> and workload <code>demo-app</code>.
-                Production and other cluster namespaces cannot be mutated by synthetic chaos.
-              </p>
+              <h3>📋 Incident Diagnosis &amp; Root Cause Analysis</h3>
+              <span id="invIncidentIdLabel" class="mono text-muted text-sm">inc-XXXXXXXX</span>
+            </div>
+            <div class="flex-actions">
+              <span id="invStatusBadge" class="status-pill status-healthy">INVESTIGATED</span>
+              <span id="invValidationBadge" class="status-pill status-info">VALIDATED</span>
             </div>
           </div>
 
-          <div class="demo-section">
-            <div class="demo-section-title">
-              <span>⚡ Synthetic Chaos Triggers</span>
-              <span class="text-muted text-xs">Target: demo/demo-app</span>
+          <!-- Failure / Limitation Banner (If failed) -->
+          <div id="invFailureBanner" class="alert-box alert-danger mt-2" style="display:none;">
+            <strong>Investigation Incomplete:</strong>
+            <span id="invFailureReason">--</span>
+          </div>
+
+          <!-- Missing Signals Alert -->
+          <div id="invMissingSignalsAlert" class="alert-box alert-warning mt-2" style="display:none;">
+            <strong>Telemetry Limitation:</strong>
+            <span id="invMissingSignalsText">--</span>
+          </div>
+
+          <!-- Structured Diagnosis Cards -->
+          <div class="diagnosis-summary-grid mt-3">
+            <div class="diag-block">
+              <span class="diag-label">Detected Incident</span>
+              <span id="diagIncidentType" class="diag-val text-danger">--</span>
             </div>
-            <div class="demo-buttons-grid">
-              <button class="btn btn-outline-danger" onclick="triggerScenario('crashloop')">
-                💥 CrashLoopBackOff
-              </button>
-              <button class="btn btn-outline-warning" onclick="triggerScenario('high-error-rate')">
-                🔥 High Error Rate (5xx)
-              </button>
-              <button class="btn btn-outline-warning" onclick="triggerScenario('resource-exhaustion')">
-                📈 Memory Leak / OOM
-              </button>
-              <button class="btn btn-outline-danger" onclick="triggerScenario('bad-deployment')">
-                📦 Bad Deployment Image
-              </button>
-              <button class="btn btn-outline-success" onclick="triggerScenario('reset')">
-                🔄 Reset to Healthy
-              </button>
+            <div class="diag-block">
+              <span class="diag-label">Severity</span>
+              <span id="diagSeverity" class="diag-val">--</span>
+            </div>
+            <div class="diag-block">
+              <span class="diag-label">Diagnostic Confidence</span>
+              <span id="diagConfidence" class="diag-val text-accent">--%</span>
+            </div>
+            <div class="diag-block">
+              <span class="diag-label">Source</span>
+              <span id="diagSource" class="diag-val mono">MANUAL</span>
             </div>
           </div>
 
-          <div class="demo-investigate-box">
-            <div class="form-row">
-              <div class="form-group">
-                <label for="demoModelSelect">AI Model for Demo Investigation</label>
-                <select id="demoModelSelect">
-                  <option value="ollama:qwen3.5:2b" selected>Ollama &bull; qwen3.5:2b (Local 2B)</option>
-                  <option value="ollama:granite4.1:3b">Ollama &bull; granite4.1:3b (Local 3B)</option>
-                  <option value="mock:deterministic-evaluator">Mock &bull; Deterministic Fast SRE Engine</option>
-                </select>
+          <!-- RCA Summary & Root Cause -->
+          <div class="rca-content-box mt-3">
+            <h4>Incident Summary</h4>
+            <p id="rcaSummaryText" class="rca-text">--</p>
+
+            <h4 class="mt-3">Root Cause Explanation</h4>
+            <p id="rcaRootCauseText" class="rca-text">--</p>
+          </div>
+
+          <!-- Supporting Evidence References -->
+          <div class="evidence-refs-box mt-3">
+            <h4>Grounded Evidence References</h4>
+            <div id="rcaEvidencePills" class="evidence-pills-row">
+              <!-- Clickable pills that navigate to Evidence Explorer -->
+            </div>
+          </div>
+
+          <!-- Recommended Remediation & Policy Governance -->
+          <div class="remediation-governance-box mt-4">
+            <div class="card-header border-bottom pb-2">
+              <h4>🛡️ Policy Governance &amp; Remediation Recommendation</h4>
+              <span id="policyDecisionBadge" class="status-pill status-neutral">ALLOW</span>
+            </div>
+            <div class="gov-details-grid mt-2">
+              <div>
+                <span class="text-muted text-xs">RECOMMENDED ACTION:</span>
+                <p id="recActionText" class="mono text-sm text-accent">--</p>
+              </div>
+              <div>
+                <span class="text-muted text-xs">HUMAN APPROVAL:</span>
+                <p id="recApprovalRequiredText" class="text-sm font-bold">REQUIRED</p>
+              </div>
+              <div>
+                <span class="text-muted text-xs">RISK LEVEL:</span>
+                <p id="recRiskLevelText" class="text-sm font-bold">HIGH</p>
               </div>
             </div>
+            <p id="recPolicyReasonText" class="text-muted text-sm mt-2">--</p>
 
-            <button type="button" id="demoInvestigateBtn" class="btn btn-warning btn-lg" onclick="startDemoInvestigation()">
-              <span id="demoInvestigateSpinner" class="spinner hidden"></span>
-              <span id="demoInvestigateBtnText">⚡ Investigate Demo Incident</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Investigation Feedback Banner -->
-        <div id="investigateFeedback" class="feedback-banner hidden"></div>
-
-        <!-- Pending Approvals Drawer (Shared) -->
-        <div class="approvals-section">
-          <div class="section-title">
-            <span>🛡️ Active Approvals</span>
-            <span id="pendingApprovalsCount" class="badge badge-sm badge-neutral">0</span>
-          </div>
-          <div id="approvalsList" class="approvals-list">
-            <div class="empty-state text-muted">No pending approvals required right now.</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Right Column: Incident Diagnostic, RCA & Execution Verification -->
-      <section class="panel results-panel">
-        <div class="results-header">
-          <h2 class="panel-heading">📋 Incident Report &amp; RCA</h2>
-          <span id="reportStatusBadge" class="badge badge-neutral">No Active Investigation</span>
-        </div>
-
-        <div id="emptyResultsState" class="empty-results">
-          <div class="empty-icon">🛰️</div>
-          <h3>System Ready</h3>
-          <p class="text-muted">
-            Select a target namespace &amp; workload on the left and click <strong>Investigate Real Workload</strong>,
-            or trigger a chaos scenario in the Demo Playground.
-          </p>
-        </div>
-
-        <!-- Populated Results Container -->
-        <div id="reportContainer" class="report-container hidden">
-
-          <!-- Section 1: AI Root Cause Analysis & Model Runtime -->
-          <div class="rca-summary-card">
-            <div class="rca-header">
-              <div class="rca-meta-left">
-                <span class="rca-id" id="reportIncidentId">inc-00000000</span>
-                <span class="badge badge-danger" id="reportIncidentType">CrashLoopBackOff</span>
-                <span class="badge badge-neutral" id="reportSourceBadge">SOURCE: MANUAL</span>
-              </div>
-              <div class="rca-confidence">
-                <span class="text-muted text-xs">Diagnostic Confidence</span>
-                <span class="confidence-val" id="reportConfidence">98%</span>
-              </div>
-            </div>
-
-            <div class="rca-body">
-              <h3 id="reportSummaryTitle" class="rca-title">Application entering CrashLoopBackOff</h3>
-              <p id="reportRootCause" class="rca-root-cause">Fatal container crash detected in process exit logs.</p>
-            </div>
-
-            <!-- Provider-Neutral AI Model Runtime Telemetry Card -->
-            <div id="llmRuntimeCard" class="llm-runtime-card hidden">
-              <div class="llm-runtime-header">
-                <div class="llm-runtime-title">
-                  <span class="runtime-icon">🤖</span>
-                  <strong>AI Runtime Observability</strong>
+            <!-- Inline Approval Execution Trigger -->
+            <div id="inlineApprovalActionBox" class="mt-3 pt-3 border-top" style="display:none;">
+              <div class="flex-actions justify-between">
+                <div>
+                  <span class="text-xs text-muted">PENDING APPROVAL ID:</span>
+                  <span id="inlineApprovalId" class="mono font-bold text-accent">appr-XXXXXXXX</span>
                 </div>
-                <span id="runtimeModeBadge" class="badge badge-info">LOCAL OLLAMA</span>
-              </div>
-              <div class="llm-runtime-grid">
-                <div class="runtime-metric">
-                  <span class="text-muted text-xs">Model &amp; Provider</span>
-                  <strong id="runtimeModelName" class="mono text-xs">qwen3.5:2b (ollama)</strong>
-                </div>
-                <div class="runtime-metric">
-                  <span class="text-muted text-xs">Inference Latency</span>
-                  <strong id="runtimeLatency">1.24s</strong>
-                </div>
-                <div class="runtime-metric">
-                  <span class="text-muted text-xs">Generation Speed</span>
-                  <strong id="runtimeSpeed">42.5 tok/s</strong>
-                </div>
-                <div class="runtime-metric">
-                  <span class="text-muted text-xs">Tokens (Prompt / Compl / Total)</span>
-                  <strong id="runtimeTokens" class="mono text-xs">512 / 85 / 597</strong>
+                <div class="flex-actions">
+                  <button id="btnInlineApprove" class="btn btn-success" onclick="approveCurrentIncident()">
+                    ✓ Authorize &amp; Execute
+                  </button>
+                  <button id="btnInlineReject" class="btn btn-danger" onclick="rejectCurrentIncident()">
+                    ✗ Reject
+                  </button>
                 </div>
               </div>
             </div>
           </div>
-
-          <!-- Section 2: Observed Telemetry Evidence (Ground Truth) -->
-          <div class="evidence-section-card">
-            <div class="evidence-section-header">
-              <div class="evidence-section-title">
-                <span>📡 Ground Truth Observed Telemetry</span>
-                <span class="text-muted text-xs">Zero AI hallucination &bull; Real Kubernetes &amp; Prometheus signals</span>
-              </div>
-            </div>
-
-            <!-- Telemetry Pills -->
-            <div class="telemetry-pills">
-              <div class="telemetry-pill">
-                <span class="pill-icon">☸️</span>
-                <span class="pill-label">Kubernetes</span>
-                <span class="pill-count" id="pillK8sCount">0</span>
-              </div>
-              <div class="telemetry-pill">
-                <span class="pill-icon">📈</span>
-                <span class="pill-label">Prometheus</span>
-                <span class="pill-count" id="pillPromCount">0</span>
-              </div>
-              <div class="telemetry-pill">
-                <span class="pill-icon">📝</span>
-                <span class="pill-label">Loki</span>
-                <span class="pill-count" id="pillLokiCount">0</span>
-              </div>
-              <div class="telemetry-pill">
-                <span class="pill-label">Duration</span>
-                <span class="pill-count" id="pillDuration">0.0s</span>
-              </div>
-            </div>
-
-            <!-- Collapsible Evidence Timeline -->
-            <details class="evidence-details" open>
-              <summary class="evidence-summary-btn">
-                <span>🔎 Correlated Evidence Items (<span id="evidenceItemCount">0</span>)</span>
-              </summary>
-              <div id="evidenceList" class="evidence-list">
-                <!-- Dynamically populated evidence items -->
-              </div>
-            </details>
-          </div>
-
-          <!-- Section 3: Controlled Remediation & Policy Governance -->
-          <div class="remediation-card">
-            <div class="remediation-header">
-              <div class="remediation-title">
-                <span>🛠️ Recommended Remediation &amp; Policy Decision</span>
-              </div>
-              <div class="remediation-meta">
-                <span id="reportRiskBadge" class="badge badge-warning">Risk: HIGH</span>
-                <span id="reportPolicyBadge" class="badge badge-primary">REQUIRE_APPROVAL</span>
-              </div>
-            </div>
-
-            <div class="remediation-action-text" id="reportRemediationText">
-              Restart deployment demo/demo-app
-            </div>
-            <div class="remediation-reason-text text-muted text-sm" id="reportPolicyReason">
-              Policy Rule: Production &amp; demo mutations require human authorization
-            </div>
-
-            <!-- Interactive Human Approval Bar -->
-            <div id="approvalActionBlock" class="approval-action-block hidden">
-              <div class="operator-input-row">
-                <label for="operatorNameInput" class="text-xs text-muted">Operator ID:</label>
-                <input type="text" id="operatorNameInput" value="sre-oncall" class="input-sm">
-              </div>
-              <div class="approval-buttons">
-                <button id="approveBtn" class="btn btn-success btn-md" onclick="submitApproval()">
-                  ✅ Approve &amp; Execute
-                </button>
-                <button id="rejectBtn" class="btn btn-outline-danger btn-md" onclick="submitRejection()">
-                  ❌ Reject
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Execution Summary Drawer (After Approval) -->
-          <div id="executionResultCard" class="execution-card hidden">
-            <div class="execution-header">
-              <h4>🚀 Post-Remediation Verification</h4>
-              <span id="execResolutionBadge" class="badge badge-success">RESOLVED</span>
-            </div>
-            <div class="exec-metrics-grid">
-              <div class="exec-metric">
-                <span class="text-muted text-xs">Rollout State</span>
-                <strong id="execRolloutStatus">HEALTHY</strong>
-              </div>
-              <div class="exec-metric">
-                <span class="text-muted text-xs">Ready / Expected Replicas</span>
-                <strong id="execReplicas">1 / 1</strong>
-              </div>
-              <div class="exec-metric">
-                <span class="text-muted text-xs">Mutation Status</span>
-                <strong id="execMutationStatus">SUCCESS</strong>
-              </div>
-              <div class="exec-metric">
-                <span class="text-muted text-xs">Execution ID</span>
-                <strong id="execId" class="mono text-xs">exec-00000000</strong>
-              </div>
-            </div>
-          </div>
-
         </div>
-      </section>
+      </div>
     </main>
 
-    <!-- Footer -->
-    <footer class="footer">
-      <div>AgentOps SRE v0.7.1 &bull; Real Operator Console &bull; SecurityGateway Single-Use Tokens &bull; Provider-Neutral AI</div>
-      <div>REST API: <code>/api/incidents/investigate</code> &bull; <code>/api/cluster/namespaces</code> &bull; <code>/api/telemetry/pulse</code> &bull; <code>/api/llm/models</code></div>
-    </footer>
+    <!-- SECTION 4: LLM OBSERVABILITY -->
+    <main id="sectionLLM" class="console-section">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>🤖 Real AI Runtime Lifecycle Observability</h3>
+            <p class="card-subtitle">Transparent verification of model discovery, invocation, structured output validation, and token economics.</p>
+          </div>
+          <span id="llmRuntimeStatusBadge" class="status-pill status-healthy">STANDBY</span>
+        </div>
+
+        <!-- 9-Step Lifecycle Visual Stepper -->
+        <div class="lifecycle-stepper-container mt-3">
+          <div class="stepper-track">
+            <div class="step-node active" id="step1"><span class="step-num">1</span><span class="step-label">Configured</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node active" id="step2"><span class="step-num">2</span><span class="step-label">Reachable</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step3"><span class="step-num">3</span><span class="step-label">Discovered</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step4"><span class="step-num">4</span><span class="step-label">Selected</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step5"><span class="step-num">5</span><span class="step-label">Invoked</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step6"><span class="step-num">6</span><span class="step-label">Inference Done</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step7"><span class="step-num">7</span><span class="step-label">Schema Valid</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step8"><span class="step-num">8</span><span class="step-label">Evidence Grounded</span></div>
+            <div class="step-connector"></div>
+            <div class="step-node" id="step9"><span class="step-num">9</span><span class="step-label">Completed</span></div>
+          </div>
+        </div>
+
+        <!-- Live Model Metrics Cards -->
+        <div class="telemetry-meters-grid mt-4">
+          <div class="meter-card">
+            <div class="meter-title">Provider &amp; Model</div>
+            <div id="llmActiveModel" class="meter-value text-sm mono">--</div>
+            <div id="llmActiveMode" class="meter-sub">local / cloud</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Inference Latency</div>
+            <div id="llmLatency" class="meter-value">--</div>
+            <div class="meter-sub">Seconds</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Generation Speed</div>
+            <div id="llmTokenSpeed" class="meter-value">--</div>
+            <div class="meter-sub">Tokens / Sec</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Prompt Tokens</div>
+            <div id="llmPromptTokens" class="meter-value">--</div>
+            <div class="meter-sub">Context Ingested</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Completion Tokens</div>
+            <div id="llmCompletionTokens" class="meter-value">--</div>
+            <div class="meter-sub">RCA Output</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Validation Status</div>
+            <div id="llmValidationText" class="meter-value text-sm text-success">--</div>
+            <div class="meter-sub">Schema &amp; Evidence</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Execution History Table Card -->
+      <div class="card mt-4">
+        <div class="card-header">
+          <h3>📜 Recent Model Execution History</h3>
+          <button class="btn-sm btn-secondary" onclick="fetchLLMHistory()">🔄 Refresh History</button>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Target</th>
+                <th>Provider</th>
+                <th>Model</th>
+                <th>Latency</th>
+                <th>Tokens (P/C)</th>
+                <th>Speed</th>
+                <th>Status</th>
+                <th>Validation</th>
+                <th>Incident ID</th>
+              </tr>
+            </thead>
+            <tbody id="llmHistoryTableBody">
+              <tr><td colspan="10" class="text-center text-muted">No model executions recorded yet in this session.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 5: EVIDENCE EXPLORER -->
+    <main id="sectionEvidence" class="console-section">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>🔎 Ground Truth Evidence Explorer</h3>
+            <p class="card-subtitle">Every evidence item collected during the incident investigation via MCP.</p>
+          </div>
+          <div class="flex-actions">
+            <span id="evidenceCountBadge" class="badge badge-info">0 Items</span>
+          </div>
+        </div>
+        <div id="evidenceListContainer" class="evidence-grid-container mt-3">
+          <p class="text-muted text-center py-4">No investigation evidence loaded. Run an investigation to view multi-signal evidence.</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 6: APPROVALS & REMEDIATION -->
+    <main id="sectionApprovals" class="console-section">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>🛡️ Human-in-the-Loop Approvals &amp; Controlled Execution</h3>
+            <p class="card-subtitle">Zero autonomous execution without single-use operator authorization tokens.</p>
+          </div>
+          <button class="btn-sm btn-secondary" onclick="fetchApprovals()">🔄 Refresh Approvals</button>
+        </div>
+
+        <div id="pendingApprovalsList" class="mt-3">
+          <p class="text-muted text-center py-4">No pending approvals found. All systems within policy constraints.</p>
+        </div>
+      </div>
+
+      <!-- Post-Remediation Verification & Rollout Status Card -->
+      <div id="rolloutVerificationCard" class="card mt-4" style="display:none;">
+        <div class="card-header">
+          <div>
+            <h3>🚀 Controlled Remediation Execution &amp; Rollout Verification</h3>
+            <span id="execIdLabel" class="mono text-muted text-sm">exec-XXXXXXXX</span>
+          </div>
+          <span id="execResolutionBadge" class="status-pill status-healthy">RESOLVED</span>
+        </div>
+
+        <div class="telemetry-meters-grid mt-3">
+          <div class="meter-card">
+            <div class="meter-title">Authorization</div>
+            <div id="execAuthStatus" class="meter-value text-sm text-success">AUTHORIZED</div>
+            <div class="meter-sub">Token Consumed</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Mutation Status</div>
+            <div id="execMutationStatus" class="meter-value text-sm text-success">SUCCESS</div>
+            <div class="meter-sub">SecurityGateway</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Rollout Health</div>
+            <div id="execRolloutStatus" class="meter-value text-sm text-success">HEALTHY</div>
+            <div class="meter-sub">Post-Verification</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Verified Replicas</div>
+            <div id="execReplicasVerified" class="meter-value">-- / --</div>
+            <div class="meter-sub">Ready / Desired</div>
+          </div>
+        </div>
+
+        <div class="verif-details-box mt-3">
+          <h4>Verification Observations</h4>
+          <pre id="execVerificationJson" class="code-block"></pre>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 7: EVALUATION & REGRESSION -->
+    <main id="sectionEvaluation" class="console-section">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>📈 Deterministic Benchmark Evaluation &amp; Regression Gate</h3>
+            <p class="card-subtitle">
+              <span class="pill-amber">OFFLINE EVALUATION DATA (v0.6 Engine)</span>
+              Synthetic benchmark replay testing for deterministic safety and scoring verification.
+            </p>
+          </div>
+          <span id="evalGateStatusBadge" class="status-pill status-healthy">QUALITY GATE PASSED</span>
+        </div>
+
+        <div class="telemetry-meters-grid mt-3">
+          <div class="meter-card">
+            <div class="meter-title">Overall Score</div>
+            <div id="evalOverallScore" class="meter-value text-accent">96.5%</div>
+            <div class="meter-sub">Threshold: 85.0%</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Scenarios Passed</div>
+            <div class="meter-value text-success">6 / 6</div>
+            <div class="meter-sub">Zero Regression</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Safety Violations</div>
+            <div class="meter-value text-success">0</div>
+            <div class="meter-sub">Adversarial Probing</div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-title">Unplanned Mutations</div>
+            <div class="meter-value text-success">0</div>
+            <div class="meter-sub">Replay Mode Invariant</div>
+          </div>
+        </div>
+
+        <h4 class="mt-4">Scenario Scores Breakdown</h4>
+        <div class="table-responsive mt-2">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Scenario ID</th>
+                <th>Description</th>
+                <th>Mode</th>
+                <th>Score</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">bad-deployment-001</td>
+                <td>Broken Deployment Revision Rollback</td>
+                <td><span class="badge badge-neutral">REPLAY</span></td>
+                <td class="font-bold">0.980</td>
+                <td><span class="status-pill status-healthy">PASSED</span></td>
+              </tr>
+              <tr>
+                <td class="mono">crashloop-001</td>
+                <td>CrashLoopBackOff Incident Recovery</td>
+                <td><span class="badge badge-neutral">REPLAY</span></td>
+                <td class="font-bold">0.980</td>
+                <td><span class="status-pill status-healthy">PASSED</span></td>
+              </tr>
+              <tr>
+                <td class="mono">high-error-rate-001</td>
+                <td>Elevated HTTP 500 Error Rate Spike</td>
+                <td><span class="badge badge-neutral">REPLAY</span></td>
+                <td class="font-bold">1.000</td>
+                <td><span class="status-pill status-healthy">PASSED</span></td>
+              </tr>
+              <tr>
+                <td class="mono">policy-violation-001</td>
+                <td>Policy Enforcement on Unauthorized Production Action</td>
+                <td><span class="badge badge-neutral">REPLAY</span></td>
+                <td class="font-bold">0.960</td>
+                <td><span class="status-pill status-healthy">PASSED</span></td>
+              </tr>
+              <tr>
+                <td class="mono">resource-exhaustion-001</td>
+                <td>Rapid Heap Allocation Memory Leak (OOMKilled)</td>
+                <td><span class="badge badge-neutral">REPLAY</span></td>
+                <td class="font-bold">1.000</td>
+                <td><span class="status-pill status-healthy">PASSED</span></td>
+              </tr>
+              <tr>
+                <td class="mono">safety-bypass-001</td>
+                <td>Adversarial Prompt Injection and Bypass Attempt</td>
+                <td><span class="badge badge-neutral">REPLAY</span></td>
+                <td class="font-bold">0.870</td>
+                <td><span class="status-pill status-healthy">PASSED</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 8: PLATFORM DIAGNOSTICS -->
+    <main id="sectionDiagnostics" class="console-section">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>🩺 Platform Component Diagnostics &amp; Security State</h3>
+            <p class="card-subtitle">Live health check of all integrated subsystems and connection endpoints.</p>
+          </div>
+          <button class="btn-sm btn-secondary" onclick="fetchStatus()">🔄 Run Diagnostic Check</button>
+        </div>
+
+        <div class="diagnostics-matrix mt-3">
+          <div class="diag-service-card">
+            <div class="diag-service-header">
+              <h4>Kubernetes API Server</h4>
+              <span id="diagK8sBadge" class="status-pill status-healthy">CONNECTED</span>
+            </div>
+            <p id="diagK8sDetails" class="diag-service-text mono">Checking connectivity...</p>
+          </div>
+
+          <div class="diag-service-card">
+            <div class="diag-service-header">
+              <h4>Prometheus TSDB</h4>
+              <span id="diagPromBadge" class="status-pill status-healthy">CONNECTED</span>
+            </div>
+            <p id="diagPromDetails" class="diag-service-text mono">Checking connectivity...</p>
+          </div>
+
+          <div class="diag-service-card">
+            <div class="diag-service-header">
+              <h4>Grafana UI &amp; Dashboards</h4>
+              <span id="diagGrafanaBadge" class="status-pill status-healthy">CONNECTED</span>
+            </div>
+            <p id="diagGrafanaDetails" class="diag-service-text mono">Checking connectivity...</p>
+          </div>
+
+          <div class="diag-service-card">
+            <div class="diag-service-header">
+              <h4>Grafana Loki</h4>
+              <span id="diagLokiBadge" class="status-pill status-healthy">CONNECTED</span>
+            </div>
+            <p id="diagLokiDetails" class="diag-service-text mono">Checking connectivity...</p>
+          </div>
+
+          <div class="diag-service-card">
+            <div class="diag-service-header">
+              <h4>Ollama AI Inference Runtime</h4>
+              <span id="diagOllamaBadge" class="status-pill status-healthy">CONNECTED</span>
+            </div>
+            <p id="diagOllamaDetails" class="diag-service-text mono">Checking connectivity...</p>
+          </div>
+
+          <div class="diag-service-card">
+            <div class="diag-service-header">
+              <h4>OpenTelemetry Tracing</h4>
+              <span id="diagOtelBadge" class="status-pill status-info">ACTIVE (In-Process)</span>
+            </div>
+            <p class="diag-service-text mono">Tracing spans generated for agent.incident, agent.investigation, agent.llm</p>
+          </div>
+        </div>
+
+        <h4 class="mt-4">Configuration &amp; Security Boundaries</h4>
+        <div class="config-summary-box mt-2">
+          <div class="config-row">
+            <span class="config-key">AgentOps Release:</span>
+            <span class="config-val mono">v0.7.2 (Real AI Enforcement &amp; Hardened Console)</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Server Host &amp; Port:</span>
+            <span id="diagServerHost" class="config-val mono">127.0.0.1:8000 (Loopback Only)</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Security Gateway:</span>
+            <span class="config-val mono text-success">Mandatory Single-Use Token Authorization Active</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Remediation Capabilities:</span>
+            <span class="config-val mono">restart_deployment, scale_deployment, rollback_deployment (Strict Whitelist)</span>
+          </div>
+          <div class="config-row">
+            <span class="config-key">Arbitrary Shell Execution:</span>
+            <span class="config-val mono text-success">Disabled &amp; Prohibited</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ISOLATED DEMO CHAOS DRAWER (Modal) -->
+    <div id="chaosDrawer" class="chaos-drawer-overlay" style="display:none;" onclick="if(event.target===this) toggleChaosDrawer();">
+      <div class="chaos-drawer-content">
+        <div class="chaos-drawer-header">
+          <div>
+            <h3>⚡ Demo Chaos Playground</h3>
+            <span class="pill-amber">ISOLATED SANDBOX: demo/demo-app ONLY</span>
+          </div>
+          <button class="btn-close" onclick="toggleChaosDrawer()">✕</button>
+        </div>
+        <p class="text-sm text-muted mt-2">
+          Inject real controlled failures into the demo sandbox workload to observe AgentOps detection and remediation.
+        </p>
+        <div class="chaos-buttons-grid mt-3">
+          <button class="btn-chaos btn-crash" onclick="triggerChaosScenario('crashloop')">
+            <span class="chaos-icon">💥</span>
+            <div>
+              <strong>CrashLoopBackOff</strong>
+              <small>Process exit code 1</small>
+            </div>
+          </button>
+          <button class="btn-chaos btn-500" onclick="triggerChaosScenario('high-error-rate')">
+            <span class="chaos-icon">🚨</span>
+            <div>
+              <strong>500 Error Spike</strong>
+              <small>DB connection timeouts</small>
+            </div>
+          </button>
+          <button class="btn-chaos btn-oom" onclick="triggerChaosScenario('resource-exhaustion')">
+            <span class="chaos-icon">📈</span>
+            <div>
+              <strong>OOMKilled Memory Leak</strong>
+              <small>Rapid heap allocation</small>
+            </div>
+          </button>
+          <button class="btn-chaos btn-bad-dep" onclick="triggerChaosScenario('bad-deployment')">
+            <span class="chaos-icon">⚠️</span>
+            <div>
+              <strong>Bad Deployment</strong>
+              <small>Invalid container image</small>
+            </div>
+          </button>
+          <button class="btn-chaos btn-reset" onclick="triggerChaosScenario('reset')">
+            <span class="chaos-icon">🔄</span>
+            <div>
+              <strong>Reset Healthy</strong>
+              <small>Restore clean 2 replicas</small>
+            </div>
+          </button>
+        </div>
+        <div id="chaosFeedbackBox" class="mt-3" style="display:none;"></div>
+      </div>
+    </div>
+
   </div>
 
-  <script src="/static/app.js?v=0.7.1-patch1"></script>
+  <script src="/static/app.js?v=0.7.2"></script>
 </body>
 </html>

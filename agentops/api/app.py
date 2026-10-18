@@ -1,18 +1,19 @@
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
-import requests
-
 from flask import Flask, jsonify, render_template, request
+import requests
 
 from agentops.clients.kubernetes import KubernetesInvestigationClient
 from agentops.clients.loki import LokiClient
 from agentops.clients.prometheus import PrometheusClient
 from agentops.config import settings
-from agentops.incident.orchestrator import IncidentWorkflowManager
+from agentops.incident.models import IncidentReport
+from agentops.incident.orchestrator import IncidentOrchestrator as IncidentWorkflowManager
 from evaluation.baseline import BaselineManager
 
 logger = logging.getLogger("agentops.api")
@@ -25,18 +26,66 @@ ALLOWED_DEMO_SCENARIOS = {
     "reset",
 }
 
+# Validation patterns
+_K8S_NAME_REGEX = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+_MODEL_NAME_REGEX = re.compile(r"^[a-zA-Z0-9_\-\.\:\/]{1,128}$")
+
+
+def validate_k8s_name(name: str, field_name: str = "resource") -> str:
+    if not name or len(name) > 63 or not _K8S_NAME_REGEX.match(name):
+        raise ValueError(
+            f"Invalid {field_name} name '{name}'. Must be lowercase alphanumeric with hyphens, max 63 characters."
+        )
+    return name
+
+
+def validate_model_name(name: str) -> str:
+    if not name or len(name) > 128 or not _MODEL_NAME_REGEX.match(name):
+        raise ValueError(
+            f"Invalid model identifier '{name}'. Must be alphanumeric with allowed provider punctuation (._-:/), max 128 characters."
+        )
+    return name
+
+
+# In-memory bounded LLM execution history (up to 100 entries, FIFO)
+_LLM_EXECUTION_HISTORY: List[Dict[str, Any]] = []
+
+
+def _record_llm_execution(report: IncidentReport) -> None:
+    if report.llm_runtime:
+        entry = {
+            "incident_id": report.incident_id,
+            "timestamp": report.timestamp,
+            "namespace": report.namespace,
+            "workload": report.workload,
+            "provider": report.llm_runtime.provider,
+            "model": report.llm_runtime.model,
+            "mode": report.llm_runtime.mode,
+            "latency_seconds": report.llm_runtime.latency_seconds,
+            "prompt_tokens": report.llm_runtime.prompt_tokens,
+            "completion_tokens": report.llm_runtime.completion_tokens,
+            "total_tokens": report.llm_runtime.total_tokens,
+            "tokens_per_second": report.llm_runtime.tokens_per_second,
+            "time_to_first_token": report.llm_runtime.time_to_first_token,
+            "status": report.llm_runtime.status,
+            "error_category": report.llm_runtime.error_category,
+            "schema_validated": report.llm_runtime.schema_validated,
+            "evidence_validated": report.llm_runtime.evidence_validated,
+            "trace_id": report.llm_runtime.trace_id,
+        }
+        _LLM_EXECUTION_HISTORY.append(entry)
+        if len(_LLM_EXECUTION_HISTORY) > 100:
+            _LLM_EXECUTION_HISTORY.pop(0)
+
 
 def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Flask:
-    """
-    Application factory for the AgentOps SRE Operator Console & REST API.
-    """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    templates_dir = os.path.join(base_dir, "templates")
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    template_dir = os.path.join(base_dir, "templates")
     static_dir = os.path.join(base_dir, "static")
 
     app = Flask(
         __name__,
-        template_folder=templates_dir,
+        template_folder=template_dir,
         static_folder=static_dir,
     )
 
@@ -49,23 +98,23 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
 
     @app.route("/api/status", methods=["GET"])
     def get_status():
-        # 1. Kubernetes check
         k8s_connected = False
-        k8s_info = "Disconnected / Local"
+        k8s_info = "Disconnected"
         k8s_ns_count = 0
+        k8s_auth_mode = "UNKNOWN"
         try:
             k8s = KubernetesInvestigationClient()
+            k8s_auth_mode = k8s.get_auth_mode()
             if k8s.is_available():
                 namespaces = k8s.get_namespaces()
                 k8s_connected = True
                 k8s_ns_count = len(namespaces)
-                k8s_info = f"Connected ({k8s_ns_count} namespaces)"
+                k8s_info = f"Connected ({k8s_ns_count} namespaces, auth: {k8s_auth_mode})"
             else:
                 k8s_info = "Kubernetes unreachable (kubectl check failed)"
         except Exception as e:
             k8s_info = f"Kubernetes check error: {str(e)}"
 
-        # 2. Prometheus check
         prom_connected = False
         try:
             prom = PrometheusClient()
@@ -73,7 +122,6 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         except Exception:
             prom_connected = False
 
-        # 3. Loki check
         loki_connected = False
         try:
             loki = LokiClient()
@@ -81,7 +129,6 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         except Exception:
             loki_connected = False
 
-        # 4. Grafana check
         grafana_connected = False
         try:
             res = requests.get(f"{settings.GRAFANA_URL}/api/health", timeout=1.5)
@@ -89,11 +136,10 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         except Exception:
             grafana_connected = False
 
-        # 5. Ollama check
         ollama_connected = False
         ollama_model_count = 0
         try:
-            res = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=1.5)
+            res = requests.get(f"{settings.OLLAMA_URL.rstrip('/')}/api/tags", timeout=1.5)
             if res.status_code == 200:
                 ollama_connected = True
                 models = res.json().get("models", [])
@@ -108,12 +154,13 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         return jsonify(
             {
                 "status": "ok",
-                "version": "0.7.1",
+                "version": "0.7.2",
                 "components": {
                     "kubernetes": {
                         "connected": k8s_connected,
                         "info": k8s_info,
                         "namespace_count": k8s_ns_count,
+                        "auth_mode": k8s_auth_mode,
                     },
                     "prometheus": {
                         "connected": prom_connected,
@@ -136,13 +183,39 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 "cluster": {
                     "connected": k8s_connected,
                     "info": k8s_info,
+                    "auth_mode": k8s_auth_mode,
                 },
                 "active_incident": active_inc.model_dump() if active_inc else None,
                 "pending_approvals_count": len(pending_apps),
                 "pending_approvals": pending_apps,
                 "last_execution": last_exec.model_dump() if last_exec else None,
             }
-        )
+        ), 200
+
+    @app.route("/api/cluster/overview", methods=["GET"])
+    def get_cluster_overview():
+        try:
+            k8s = KubernetesInvestigationClient()
+            overview = k8s.get_cluster_overview()
+            return jsonify({
+                "status": "ok" if overview["connected"] else "disconnected",
+                "cluster": overview,
+            }), 200 if overview["connected"] else 503
+        except Exception as e:
+            logger.error(f"Failed to fetch cluster overview: {e}")
+            return jsonify({
+                "status": "error",
+                "error": str(e),
+                "cluster": {
+                    "connected": False,
+                    "auth_mode": "UNKNOWN",
+                    "current_context": "unavailable",
+                    "nodes_count": 0,
+                    "nodes": [],
+                    "namespaces_count": 0,
+                    "namespaces": [],
+                }
+            }), 503
 
     @app.route("/api/cluster/namespaces", methods=["GET"])
     def get_cluster_namespaces():
@@ -155,18 +228,22 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 "count": len(namespaces),
             }), 200
         except Exception as e:
-            logger.warning(f"Failed to fetch cluster namespaces: {e}")
-            fallback = ["demo", "default", "kube-system"]
+            logger.error(f"Failed to fetch cluster namespaces: {e}")
             return jsonify({
-                "status": "partial",
-                "namespaces": fallback,
-                "count": len(fallback),
-                "error": str(e),
-            }), 200
+                "status": "error",
+                "namespaces": [],
+                "count": 0,
+                "error": f"Failed to retrieve namespaces: {str(e)}",
+            }), 503
 
     @app.route("/api/cluster/workloads", methods=["GET"])
     def get_cluster_workloads():
-        namespace = request.args.get("namespace", "demo")
+        raw_ns = request.args.get("namespace", "demo")
+        try:
+            namespace = validate_k8s_name(raw_ns, "namespace")
+        except ValueError as ve:
+            return jsonify({"status": "error", "error": str(ve)}), 400
+
         try:
             k8s = KubernetesInvestigationClient()
             deployments = k8s.get_deployments(namespace=namespace)
@@ -179,43 +256,91 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 "count": len(workload_names),
             }), 200
         except Exception as e:
-            logger.warning(f"Failed to fetch workloads for namespace '{namespace}': {e}")
-            fallback = ["demo-app"] if namespace == "demo" else []
+            logger.error(f"Failed to fetch workloads for namespace '{namespace}': {e}")
             return jsonify({
-                "status": "partial",
+                "status": "error",
                 "namespace": namespace,
-                "workloads": fallback,
+                "workloads": [],
                 "deployments": [],
-                "count": len(fallback),
-                "error": str(e),
+                "count": 0,
+                "error": f"Failed to retrieve workloads for namespace '{namespace}': {str(e)}",
+            }), 503
+
+    @app.route("/api/cluster/pods", methods=["GET"])
+    def get_cluster_pods():
+        raw_ns = request.args.get("namespace", "demo")
+        workload = request.args.get("workload")
+        try:
+            namespace = validate_k8s_name(raw_ns, "namespace")
+            if workload:
+                validate_k8s_name(workload, "workload")
+        except ValueError as ve:
+            return jsonify({"status": "error", "error": str(ve)}), 400
+
+        try:
+            k8s = KubernetesInvestigationClient()
+            selector = f"app={workload}" if workload else None
+            pods = k8s.get_pod_health_summaries(namespace=namespace, label_selector=selector)
+            return jsonify({
+                "status": "ok",
+                "namespace": namespace,
+                "workload": workload,
+                "pods": pods,
+                "count": len(pods),
             }), 200
+        except Exception as e:
+            return jsonify({"status": "error", "error": str(e)}), 503
+
+    @app.route("/api/cluster/events", methods=["GET"])
+    def get_cluster_events():
+        raw_ns = request.args.get("namespace", "demo")
+        workload = request.args.get("workload")
+        try:
+            namespace = validate_k8s_name(raw_ns, "namespace")
+            if workload:
+                validate_k8s_name(workload, "workload")
+        except ValueError as ve:
+            return jsonify({"status": "error", "error": str(ve)}), 400
+
+        try:
+            k8s = KubernetesInvestigationClient()
+            events = k8s.get_warning_events(namespace=namespace, resource_name=workload, limit=30)
+            return jsonify({
+                "status": "ok",
+                "namespace": namespace,
+                "workload": workload,
+                "events": events,
+                "count": len(events),
+            }), 200
+        except Exception as e:
+            return jsonify({"status": "error", "error": str(e)}), 503
 
     @app.route("/api/telemetry/pulse", methods=["GET"])
     def get_telemetry_pulse():
-        """
-        STRICTLY READ-ONLY telemetry pulse for real-time observability.
-        Never produces ActionRequests, approvals, or evaluations.
-        """
-        namespace = request.args.get("namespace", "demo")
-        workload = request.args.get("workload", "demo-app")
+        raw_ns = request.args.get("namespace", "demo")
+        raw_wl = request.args.get("workload", "demo-app")
+        try:
+            namespace = validate_k8s_name(raw_ns, "namespace")
+            workload = validate_k8s_name(raw_wl, "workload")
+        except ValueError as ve:
+            return jsonify({"status": "error", "error": str(ve)}), 400
 
         k8s = KubernetesInvestigationClient()
         prom = PrometheusClient()
 
-        # 1. Kubernetes health signals
         dep_summary = k8s.get_deployment_summary(name=workload, namespace=namespace)
         pods = k8s.get_pod_health_summaries(namespace=namespace, label_selector=f"app={workload}")
         warning_events = k8s.get_warning_events(namespace=namespace, resource_name=workload, limit=5)
 
         total_restarts = sum(p.get("restart_count", 0) for p in pods)
         ready_pods = sum(1 for p in pods if p.get("is_ready"))
-        desired_replicas = dep_summary.get("desired_replicas", len(pods))
+        desired_replicas = dep_summary.get("desired_replicas", 0)
 
-        # 2. Prometheus telemetry metrics
+        prom_connected = prom.is_available()
         error_rate = None
         p95_latency = None
         memory_mb = None
-        prom_connected = prom.is_available()
+
         if prom_connected:
             try:
                 error_rate = prom.get_http_error_rate(app=workload, namespace=namespace)
@@ -225,13 +350,12 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
             except Exception as e:
                 logger.debug(f"Prometheus pulse query exception: {e}")
 
-        # 3. Overall pulse status: healthy / degraded / critical / unknown
         pulse_status = "healthy"
         reasons = []
 
         if not dep_summary.get("found") and not pods:
             pulse_status = "unknown"
-            reasons.append(f"Workload '{workload}' not found in '{namespace}'")
+            reasons.append(f"Workload '{workload}' not found in namespace '{namespace}'")
         else:
             if desired_replicas > 0 and ready_pods == 0:
                 pulse_status = "critical"
@@ -288,7 +412,8 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
     @app.route("/api/llm/models", methods=["GET"])
     def get_llm_models():
         """
-        Discover available LLM models across local Ollama and optional cloud APIs.
+        Discover available real LLM models across local Ollama and configured cloud APIs.
+        MOCK providers are strictly excluded from production investigation choices.
         """
         ollama_url = settings.OLLAMA_URL.rstrip("/")
         ollama_available = False
@@ -296,7 +421,7 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         ollama_error = None
 
         try:
-            res = requests.get(f"{ollama_url}/api/tags", timeout=1.5)
+            res = requests.get(f"{ollama_url}/api/tags", timeout=2.0)
             if res.status_code == 200:
                 ollama_available = True
                 data = res.json()
@@ -319,10 +444,8 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
             cloud_providers.append({"provider": "openai", "name": "OpenAI", "models": ["gpt-4o", "gpt-4o-mini"]})
         if os.getenv("GEMINI_API_KEY"):
             cloud_providers.append({"provider": "gemini", "name": "Google Gemini", "models": ["gemini-2.5-pro", "gemini-2.5-flash"]})
-        if os.getenv("ANTHROPIC_API_KEY"):
-            cloud_providers.append({"provider": "anthropic", "name": "Anthropic Claude", "models": ["claude-3-5-sonnet"]})
 
-        default_provider = "mock"
+        default_provider = "none"
         default_model = None
 
         if ollama_available and ollama_models:
@@ -334,7 +457,11 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                     break
             if not default_model:
                 default_model = names[0]
+        elif cloud_providers:
+            default_provider = cloud_providers[0]["provider"]
+            default_model = cloud_providers[0]["models"][0]
 
+        mock_allowed = app.testing or os.getenv("ALLOW_MOCK_RCA") == "true"
         return jsonify({
             "status": "ok",
             "default": {
@@ -352,24 +479,48 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 "providers": cloud_providers,
             },
             "mock": {
-                "available": True,
-                "name": "Deterministic Mock / Fast Rule-Engine",
-                "models": ["deterministic-evaluator"],
+                "available": mock_allowed,
+                "name": "Deterministic Mock (Offline Test Double Only)",
+                "models": ["deterministic-evaluator"] if mock_allowed else [],
             },
+        }), 200
+
+    @app.route("/api/llm/history", methods=["GET"])
+    def get_llm_history():
+        """Retrieve recent LLM runtime execution telemetry records."""
+        return jsonify({
+            "status": "ok",
+            "history": list(reversed(_LLM_EXECUTION_HISTORY)),
+            "count": len(_LLM_EXECUTION_HISTORY),
         }), 200
 
     @app.route("/api/incidents/investigate", methods=["POST"])
     def investigate_incident():
         payload = request.get_json() or {}
-        namespace = payload.get("namespace", "demo")
-        workload = payload.get("workload", "demo-app")
+        raw_ns = payload.get("namespace", "demo")
+        raw_wl = payload.get("workload", "demo-app")
         incident_description = payload.get("incident_description")
-        provider = payload.get("provider", "mock")
+        provider = payload.get("provider", "ollama")
         model = payload.get("model")
         dry_run = bool(payload.get("dry_run", False))
         source = payload.get("source", "MANUAL")
         if source not in ("MANUAL", "ALERT", "DEMO"):
             source = "MANUAL"
+
+        try:
+            namespace = validate_k8s_name(raw_ns, "namespace")
+            workload = validate_k8s_name(raw_wl, "workload")
+            if model:
+                model = validate_model_name(model)
+        except ValueError as ve:
+            return jsonify({"status": "error", "error": str(ve)}), 400
+
+        # Reject mock provider in live investigations unless explicitly in test environment
+        if provider == "mock" and not app.testing and source != "DEMO" and os.getenv("ALLOW_MOCK_RCA") != "true":
+            return jsonify({
+                "status": "error",
+                "error": "Mock/Rule-based RCA generation is prohibited in live investigations. Select a real model (Ollama, OpenAI, or Gemini)."
+            }), 400
 
         try:
             report = workflow.investigate_and_recommend(
@@ -381,10 +532,15 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 dry_run=dry_run,
                 source=source,
             )
+            _record_llm_execution(report)
             return jsonify(report.model_dump()), 200
         except Exception as e:
-            logger.exception("Investigation failed")
-            return jsonify({"error": str(e)}), 500
+            logger.exception("Investigation execution failed")
+            return jsonify({
+                "status": "error",
+                "error": str(e),
+                "error_category": getattr(e, "error_category", type(e).__name__),
+            }), 500
 
     @app.route("/api/incidents/active", methods=["GET"])
     def get_active_incident():
@@ -450,7 +606,6 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 400,
             )
 
-        # Mode B Sandbox Isolation: Strictly restrict chaos triggers to demo/demo-app
         req_namespace = payload.get("namespace", "demo")
         req_workload = payload.get("workload", "demo-app")
         if req_namespace != "demo" or req_workload != "demo-app":
@@ -503,6 +658,7 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
             return jsonify(
                 {
                     "status": "ok",
+                    "type": "OFFLINE_EVALUATION_DATA",
                     "baseline_id": baseline.baseline_id,
                     "overall_score": baseline.overall_score,
                     "passing": baseline.overall_score >= 0.85,
@@ -511,11 +667,11 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 }
             )
         except Exception as e:
-            return jsonify({"status": "unavailable", "error": str(e), "overall_score": None})
+            return jsonify({"status": "unavailable", "type": "OFFLINE_EVALUATION_DATA", "error": str(e), "overall_score": None})
 
     return app
 
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host=settings.AGENTOPS_HOST, port=settings.AGENTOPS_PORT, debug=True)

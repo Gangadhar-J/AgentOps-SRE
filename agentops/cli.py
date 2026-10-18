@@ -186,15 +186,16 @@ def handle_investigate(args):
     """
     Execute AI SRE investigation over MCP.
     """
-    if args.provider == "gemini":
-        llm_provider = GeminiLLMProvider(model_name=args.model or "gemini-2.5-pro")
-    elif args.provider == "openai":
-        llm_provider = OpenAILLMProvider(model_name=args.model or "gpt-4o")
-    elif args.provider == "ollama":
-        from agentops.config import settings
-        llm_provider = OpenAILLMProvider(base_url=f"{settings.OLLAMA_URL}/v1", model_name=args.model or "qwen3.5:2b")
-    else:
-        llm_provider = MockRuleBasedLLMProvider()
+    from agentops.llm.factory import get_llm_provider
+    try:
+        if args.provider == "mock":
+            from agentops.llm.mock_provider import MockRuleBasedLLMProvider
+            llm_provider = MockRuleBasedLLMProvider(model_name=args.model or "test-double-rule-engine")
+        else:
+            llm_provider = get_llm_provider(provider_override=args.provider, model_override=args.model)
+    except Exception as e:
+        print(f"Error initializing LLM provider '{args.provider}': {str(e)}", file=sys.stderr)
+        sys.exit(1)
 
     agent = SREAgent(llm_provider=llm_provider)
 
@@ -613,7 +614,7 @@ def main():
     inc_p.add_argument("target", help="Target workload (e.g. demo-app or demo/demo-app)")
     inc_p.add_argument("--namespace", default="demo", help="Kubernetes namespace (defaults to target prefix or demo)")
     inc_p.add_argument("--incident", default=None, help="Incident context or alert description")
-    inc_p.add_argument("--provider", choices=["mock", "gemini", "openai", "ollama"], default="mock", help="LLM Provider")
+    inc_p.add_argument("--provider", choices=["mock", "gemini", "openai", "ollama"], default="ollama", help="LLM Provider (default: ollama)")
     inc_p.add_argument("--model", default=None, help="Specific LLM model name")
     inc_p.add_argument("--dry-run", action="store_true", help="Evaluate policy & risk without creating approval or executing")
     inc_p.add_argument("--auto", action="store_true", help="Non-interactive execution (auto-authorizes if approval required)")
@@ -646,7 +647,7 @@ def main():
     inv_parser.add_argument("--namespace", default="demo", help="Kubernetes namespace")
     inv_parser.add_argument("--workload", default="demo-app", help="Workload name")
     inv_parser.add_argument("--incident", default=None, help="Incident description")
-    inv_parser.add_argument("--provider", choices=["mock", "gemini", "openai", "ollama"], default="mock")
+    inv_parser.add_argument("--provider", choices=["mock", "gemini", "openai", "ollama"], default="ollama", help="LLM Provider (default: ollama)")
     inv_parser.add_argument("--model", default=None, help="Specific LLM model name")
     inv_parser.add_argument("--json", action="store_true", help="Output RCA as raw JSON")
     inv_parser.set_defaults(func=handle_investigate)

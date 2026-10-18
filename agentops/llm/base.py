@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 from agentops.models.evidence import InvestigationContext
 from agentops.models.rca import RootCauseAnalysis
+from agentops.llm.exceptions import InvalidModelOutputError
 
 logger = logging.getLogger("agentops.llm")
 
@@ -58,5 +59,8 @@ class BaseLLMProvider(abc.ABC):
             parsed["investigation_id"] = investigation_id
             return RootCauseAnalysis.model_validate(parsed)
         except Exception as e:
-            logger.error(f"Failed to validate LLM response against RCA schema: {str(e)}\nRaw: {raw_json}")
-            raise ValueError(f"Invalid RCA structured output from LLM: {str(e)}") from e
+            logger.error(f"Failed to validate LLM response against RCA schema: {str(e)}\nRaw: {raw_json[:500]}")
+            raise InvalidModelOutputError(
+                f"Invalid RCA structured output from LLM: {str(e)}",
+                details={"raw_snippet": raw_json[:300]},
+            ) from e

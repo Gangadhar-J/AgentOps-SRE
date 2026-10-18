@@ -37,8 +37,13 @@ class AgentObservabilityMetrics(BaseModel):
     llm_model: str = "unknown"
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
+    time_to_first_token: Optional[float] = None
     errors: List[str] = Field(default_factory=list)
+    error_category: Optional[str] = None
+    schema_validated: bool = False
+    evidence_validated: bool = False
     telemetry_availability: Dict[str, bool] = Field(default_factory=dict)
+    missing_signals: List[str] = Field(default_factory=list)
     mcp_metrics: Optional[Dict[str, Any]] = Field(default=None, description="MCP request counts, latencies, and tool call stats")
 
 
@@ -54,4 +59,6 @@ class RootCauseAnalysis(BaseModel):
     recommended_action: str = Field(description="Human-actionable remediation recommendation")
     requires_human_approval: bool = Field(default=True, description="Strictly True for all remediation proposals")
     telemetry_coverage: Dict[str, bool] = Field(default_factory=dict, description="Indicates availability of Kubernetes, Prometheus, Loki during investigation")
+    validation_passed: bool = Field(default=False, description="Whether the output passed strict schema and evidence validation")
+    missing_signals: List[str] = Field(default_factory=list, description="Telemetry sources or signals that were unavailable or missing")
     agent_metrics: Optional[AgentObservabilityMetrics] = None
