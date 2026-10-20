@@ -1,7 +1,7 @@
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 from agentops.llm.base import BaseLLMProvider
-from agentops.models.evidence import EvidenceType, InvestigationContext, TelemetrySource
+from agentops.models.evidence import InvestigationContext
 from agentops.models.rca import (
     IncidentSeverity,
     IncidentType,

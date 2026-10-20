@@ -9,8 +9,6 @@ from agentops.mcp.schemas import (
 )
 from agentops.models.remediation import (
     PreRemediationSnapshot,
-    RemediationMetricsTracker,
-    RemediationResult,
     RemediationVerification,
 )
 from agentops.security import (

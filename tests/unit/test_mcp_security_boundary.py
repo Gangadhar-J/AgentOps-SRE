@@ -1,4 +1,3 @@
-import pytest
 from agentops.mcp.server import create_mcp_server
 
 

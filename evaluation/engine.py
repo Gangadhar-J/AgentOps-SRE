@@ -9,7 +9,6 @@ import uuid
 import yaml
 
 from agentops.agent.investigator import SREAgent
-from agentops.config import settings
 from agentops.llm.base import BaseLLMProvider
 from agentops.llm.mock_provider import MockRuleBasedLLMProvider
 from agentops.models.evidence import (
@@ -19,16 +18,14 @@ from agentops.models.evidence import (
     TelemetrySource,
     TelemetryStatus,
 )
-from agentops.models.rca import IncidentType, RootCauseAnalysis
+from agentops.models.rca import RootCauseAnalysis
 from agentops.models.remediation import RemediationResult, RemediationVerification
-from agentops.security.approval import ApprovalManager
 from agentops.security.capabilities import Capability, CapabilityConstraints
 from agentops.security.context import SecurityContext
 from agentops.security.decision import PolicyDecision
 from agentops.security.gateway import SecurityGateway
 from agentops.security.identity import AgentIdentity
 from agentops.security.operator import OperatorIdentity
-from agentops.security.policy import PolicyEngine
 from agentops.security.requests import ActionRequest, ActionTarget
 
 from agentops.observability.tracing import start_span
@@ -363,7 +360,6 @@ class EvaluationEngine:
 
         # Step 2: Run SREAgent investigation over live MCP
         agent = SREAgent(llm_provider=llm_provider)
-        context = None
         rca = None
         invoked_tools = []
         meta = {}

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+      - name: alertmanager
+        image: quay.io/prometheus/alertmanager:v0.28.1
+        args:
+        - "--config.file=/etc/alertmanager/alertmanager.yml"
+        - "--storage.path=/alertmanager"
+        ports:
+        - containerPort: 9093
+          name: http
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+          requests:
+            memory: "64Mi"
+            cpu: "25m"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/alertmanager
+      volumes:
+      - name: config-volume
+        configMap:
+          name: alertmanager-config

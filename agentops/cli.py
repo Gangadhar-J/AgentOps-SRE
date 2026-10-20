@@ -1,20 +1,15 @@
 import argparse
-import json
 import logging
 import sys
 import uuid
 from agentops.agent.investigator import SREAgent
 from agentops.config import settings
-from agentops.llm.gemini import GeminiLLMProvider
-from agentops.llm.mock_provider import MockRuleBasedLLMProvider
-from agentops.llm.openai_provider import OpenAILLMProvider
 from agentops.security.approval import ApprovalManager
 from agentops.security.capabilities import Capability, CapabilityConstraints
 from agentops.security.context import SecurityContext
 from agentops.security.gateway import SecurityGateway
 from agentops.security.identity import AgentIdentity
 from agentops.security.operator import OperatorIdentity
-from agentops.security.policy import PolicyEngine
 from agentops.security.requests import ActionRequest, ActionTarget
 
 from agentops.incident.orchestrator import IncidentWorkflowManager
@@ -175,10 +170,47 @@ def handle_serve(args):
     print("=" * 65)
     print(f" Web Console UI:  http://{host}:{port}/")
     print(f" REST API:        http://{host}:{port}/api/status")
-    print(f" Cluster Status:  Connected via Kubernetes context")
+    print(" Cluster Status:  Connected via Kubernetes context")
     print(" Press Ctrl+C to stop.")
     print("=" * 65 + "\n")
     app.run(host=host, port=port, debug=args.debug)
+
+
+def handle_worker(args):
+    """
+    Run standalone durable investigation worker process.
+    """
+    from agentops.worker import InvestigationWorker
+    import signal
+    import time
+    concurrency = getattr(args, "concurrency", settings.MAX_CONCURRENT_INVESTIGATIONS)
+    poll_int = getattr(args, "poll_interval", 0.5)
+    worker = InvestigationWorker(max_concurrent=concurrency, poll_interval=poll_int)
+
+    print("\n" + "=" * 65)
+    print("         AGENTOPS SRE - DURABLE INVESTIGATION WORKER")
+    print("=" * 65)
+    print(f" Worker ID:       {worker.worker_id}")
+    print(f" Concurrency:     {concurrency} investigation(s)")
+    print(f" Queue Lease:     {settings.JOB_LEASE_SECONDS}s")
+    print(f" Database Store:  {settings.DB_PATH}")
+    print(" Press Ctrl+C to stop.")
+    print("=" * 65 + "\n")
+
+    def stop_handler(signum, frame):
+        print("\nStopping investigation worker gracefully...")
+        worker.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, stop_handler)
+    signal.signal(signal.SIGTERM, stop_handler)
+    worker.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        worker.stop()
 
 
 
@@ -335,7 +367,7 @@ def handle_approvals(args):
     elif args.approval_action == "approve":
         operator = OperatorIdentity(operator_id=args.operator, display_name=args.operator)
         try:
-            res = manager.approve(args.approval_id, operator=operator, reason=args.reason)
+            manager.approve(args.approval_id, operator=operator, reason=args.reason)
             print(f"✓ Approval '{args.approval_id}' successfully APPROVED by '{args.operator}'.")
         except Exception as e:
             print(f"Error approving request: {str(e)}", file=sys.stderr)
@@ -344,7 +376,7 @@ def handle_approvals(args):
     elif args.approval_action == "reject":
         operator = OperatorIdentity(operator_id=args.operator, display_name=args.operator)
         try:
-            res = manager.reject(args.approval_id, operator=operator, reason=args.reason)
+            manager.reject(args.approval_id, operator=operator, reason=args.reason)
             print(f"✓ Approval '{args.approval_id}' successfully REJECTED by '{args.operator}'.")
         except Exception as e:
             print(f"Error rejecting request: {str(e)}", file=sys.stderr)
@@ -641,6 +673,11 @@ def main():
     ui_p.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
     ui_p.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
     ui_p.set_defaults(func=handle_serve)
+
+    worker_p = subparsers.add_parser("worker", help="Run standalone durable investigation worker process")
+    worker_p.add_argument("--concurrency", type=int, default=settings.MAX_CONCURRENT_INVESTIGATIONS, help="Max concurrent investigations (default: 1)")
+    worker_p.add_argument("--poll-interval", type=float, default=0.5, help="Queue polling interval in seconds")
+    worker_p.set_defaults(func=handle_worker)
 
     # 1. Investigate command
     inv_parser = subparsers.add_parser("investigate", help="Run AI incident investigation")

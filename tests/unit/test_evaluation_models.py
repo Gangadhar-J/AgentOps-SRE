@@ -1,6 +1,8 @@
 import pytest
+from pydantic import ValidationError
 from evaluation.models import (
     EvaluationResult,
+    EvaluationRunMetadata,
     EvaluationRunSummary,
     EvaluationScores,
     ExpectedRemediation,
@@ -155,9 +157,6 @@ def test_baseline_manager_regression_detection(tmp_path):
     is_reg, details = mgr.compare(summary_curr, baseline_path=base_file)
     assert is_reg is True
     assert any("Overall score regressed" in d for d in details)
-
-from pydantic import ValidationError
-from evaluation.models import EvaluationRunMetadata
 
 
 def test_scenario_definition_rejects_unknown_fields():

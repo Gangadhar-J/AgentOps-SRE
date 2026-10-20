@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from agentops.mcp.client import SREMCPClient
 from agentops.models.evidence import (
     EvidenceType,

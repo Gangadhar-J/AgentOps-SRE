@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -42,9 +41,11 @@ class IncidentWorkflowManager:
         self,
         gateway: Optional[SecurityGateway] = None,
         approval_manager: Optional[ApprovalManager] = None,
+        orchestrator: Optional[Any] = None,
     ):
         self.gateway = gateway or SecurityGateway()
         self.approval_manager = approval_manager or self.gateway.approval_manager
+        self.orchestrator = orchestrator
         self._active_incident: Optional[IncidentReport] = None
         self._last_execution: Optional[RemediationExecutionSummary] = None
 
@@ -121,23 +122,30 @@ class IncidentWorkflowManager:
         model_name: Optional[str] = None,
         dry_run: bool = False,
         source: IncidentSource = "MANUAL",
+        incident_id: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
+        cancellation_check: Optional[Any] = None,
+        orchestrator: Optional[Any] = None,
     ) -> IncidentReport:
         """
         Run end-to-end investigation, produce RCA, independently validate evidence references,
         evaluate security policy, and generate pending approval if required and permitted.
         """
         start_time = time.time()
-        incident_id = f"inc-{uuid.uuid4().hex[:8]}"
+        incident_id = incident_id or f"inc-{uuid.uuid4().hex[:8]}"
 
         with start_span("agent.incident", attributes={"incident.id": incident_id, "incident.namespace": namespace, "incident.workload": workload, "dry_run": dry_run, "source": source}):
             llm_provider = self._get_provider(provider_name, model_name)
-            agent = SREAgent(llm_provider=llm_provider)
+            active_orchestrator = orchestrator or self.orchestrator
+            agent = SREAgent(llm_provider=llm_provider, orchestrator=active_orchestrator)
 
             logger.info(f"Investigating workload '{workload}' in namespace '{namespace}' (Incident: {incident_id}, Source: {source}, Provider: {provider_name})")
             rca = agent.investigate(
                 namespace=namespace,
                 workload=workload,
                 incident_description=incident_description,
+                progress_callback=progress_callback,
+                cancellation_check=cancellation_check,
             )
 
             # Summarize Evidence Telemetry
@@ -278,6 +286,17 @@ class IncidentWorkflowManager:
                 )
                 sec_ctx = SecurityContext(identity=identity, capabilities=caps, request_id=action_req_id)
 
+                if cancellation_check and cancellation_check():
+                    from agentops.worker.models import InvestigationCancelledError
+                    raise InvestigationCancelledError("Investigation cancelled before policy evaluation.")
+
+                if progress_callback:
+                    progress_callback(
+                        "evaluating_policy",
+                        f"Evaluating security policy and risk constraints for action '{action_name}'...",
+                        {"action": action_name, "target_resource": f"{namespace}/{workload}"},
+                    )
+
                 if dry_run:
                     eval_dec = self.gateway.policy_engine.evaluate(sec_ctx, action_request)
                     policy_decision_str = eval_dec.decision
@@ -328,6 +347,14 @@ class IncidentWorkflowManager:
             )
 
             self._active_incident = report
+
+            if progress_callback:
+                progress_callback(
+                    "completed",
+                    f"Investigation finalized with status: '{status}' (Confidence: {report.confidence})",
+                    {"status": status, "incident_id": incident_id, "confidence": report.confidence},
+                )
+
             return report
 
     def approve_and_execute(

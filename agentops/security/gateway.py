@@ -1,14 +1,12 @@
 from datetime import datetime, timezone
 import logging
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 import uuid
 from agentops.clients.remediation import KubernetesRemediationClient
 from agentops.models.remediation import (
-    PreRemediationSnapshot,
     RemediationMetricsTracker,
     RemediationResult,
-    RemediationVerification,
 )
 from agentops.security.approval import ApprovalManager, ApprovalRequest
 from agentops.security.audit import AuditLogger, PolicyEvaluationRecord

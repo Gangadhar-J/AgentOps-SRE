@@ -9,6 +9,14 @@ data:
       scrape_interval: 5s
       evaluation_interval: 5s
 
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets: ['alertmanager.monitoring.svc.cluster.local:9093']
+
+    rule_files:
+      - '/etc/prometheus/alerts.yml'
+
     scrape_configs:
     - job_name: 'prometheus'
       static_configs:
@@ -52,3 +60,25 @@ data:
       - source_labels: [__meta_kubernetes_pod_node_name]
         action: replace
         target_label: node
+
+  alerts.yml: |
+    groups:
+    - name: agentops-demo-alerts
+      rules:
+      - alert: DemoAppCrashLoop
+        expr: sum by (namespace, app) (rate(kube_pod_container_status_restarts_total{app="demo-app"}[2m])) > 0
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod CrashLoopBackOff detected in {{ $labels.namespace }}/{{ $labels.app }}"
+          description: "Workload pods are cycling in restart backoff with non-zero exit codes."
+
+      - alert: DemoAppHighErrorRate
+        expr: (sum by (namespace, app) (rate(http_requests_total{app="demo-app", status=~"5.."}[2m])) / sum by (namespace, app) (rate(http_requests_total{app="demo-app"}[2m]))) * 100 > 5
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elevated HTTP 5xx error rate detected in {{ $labels.namespace }}/{{ $labels.app }}"
+          description: "HTTP error rate exceeds 5% threshold over a 2m sliding window."

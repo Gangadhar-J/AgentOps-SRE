@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 from agentops.security.capabilities import Capability
 from agentops.security.identity import AgentIdentity

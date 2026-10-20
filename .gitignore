@@ -43,3 +43,7 @@ htmlcov/
 # Kind / K8s local
 *.kubeconfig
 kubeconfig.yaml
+
+# SQLite WAL temporary files
+*.db-wal
+*.db-shm

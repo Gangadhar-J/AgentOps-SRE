@@ -1,7 +1,6 @@
 import argparse
 import json
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import patch
 
 from agentops.cli import handle_operator_approve, handle_operator_incident
 from agentops.incident.models import EvidenceDetail, IncidentReport, RemediationExecutionSummary

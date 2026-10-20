@@ -1,7 +1,7 @@
 import abc
 import json
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 from agentops.models.evidence import InvestigationContext
 from agentops.models.rca import RootCauseAnalysis
 from agentops.llm.exceptions import InvalidModelOutputError

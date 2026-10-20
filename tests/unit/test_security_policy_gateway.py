@@ -1,6 +1,5 @@
 from unittest.mock import MagicMock
 import pytest
-from pydantic import ValidationError
 from agentops.security import (
     ActionRequest,
     ActionTarget,
@@ -8,9 +7,7 @@ from agentops.security import (
     AuditLogger,
     Capability,
     CapabilityConstraints,
-    PolicyDecision,
     PolicyEngine,
-    PolicyEvaluationRecord,
     PolicyRule,
     PolicySet,
     SecurityContext,

@@ -41,6 +41,25 @@ class Settings:
     LOGS_LIMIT: int = int(os.getenv("LOGS_LIMIT", "50"))
     EVENTS_LIMIT: int = int(os.getenv("EVENTS_LIMIT", "30"))
 
+    # Asynchronous Worker & Queue Configuration
+    MAX_CONCURRENT_INVESTIGATIONS: int = int(os.getenv("MAX_CONCURRENT_INVESTIGATIONS", "1"))
+    JOB_LEASE_SECONDS: int = int(os.getenv("JOB_LEASE_SECONDS", "120"))
+    JOB_QUEUE_MAX_SIZE: int = int(os.getenv("JOB_QUEUE_MAX_SIZE", "100"))
+    MAX_JOB_RETRIES: int = int(os.getenv("MAX_JOB_RETRIES", "3"))
+    IN_PROCESS_WORKER: bool = os.getenv("IN_PROCESS_WORKER", "true").lower().strip() in ("1", "true", "yes")
+
+    # Alertmanager & Notification Integration
+    ALERTMANAGER_URL: str = os.getenv("ALERTMANAGER_URL", "http://localhost:30093")
+    ALERTMANAGER_SECRET: str = os.getenv("ALERTMANAGER_SECRET", "")
+    ALERTMANAGER_ALLOW_QUERY_AUTH: bool = os.getenv("ALERTMANAGER_ALLOW_QUERY_AUTH", "false").lower().strip() in ("1", "true", "yes")
+    ALERT_COOLDOWN_SECONDS: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "300"))
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "localhost")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "agentops-sre@localhost")
+    NOTIFICATION_EMAIL_TO: str = os.getenv("NOTIFICATION_EMAIL_TO", "")
+
     # Project Paths (fully portable across developer workstations, CI, and containers)
     BASE_DIR: Path = BASE_DIR
     POLICIES_PATH: str = os.getenv("POLICIES_PATH", str(BASE_DIR / "config" / "policies.yaml"))
@@ -73,6 +92,21 @@ class Settings:
         self.TELEMETRY_TIMEOUT_SECONDS = int(os.getenv("TELEMETRY_TIMEOUT_SECONDS", "5"))
         self.LOGS_LIMIT = int(os.getenv("LOGS_LIMIT", "50"))
         self.EVENTS_LIMIT = int(os.getenv("EVENTS_LIMIT", "30"))
+        self.MAX_CONCURRENT_INVESTIGATIONS = int(os.getenv("MAX_CONCURRENT_INVESTIGATIONS", "1"))
+        self.JOB_LEASE_SECONDS = int(os.getenv("JOB_LEASE_SECONDS", "120"))
+        self.JOB_QUEUE_MAX_SIZE = int(os.getenv("JOB_QUEUE_MAX_SIZE", "100"))
+        self.MAX_JOB_RETRIES = int(os.getenv("MAX_JOB_RETRIES", "3"))
+        self.IN_PROCESS_WORKER = os.getenv("IN_PROCESS_WORKER", "true").lower().strip() in ("1", "true", "yes")
+        self.ALERTMANAGER_URL = os.getenv("ALERTMANAGER_URL", "http://localhost:30093")
+        self.ALERTMANAGER_SECRET = os.getenv("ALERTMANAGER_SECRET", "")
+        self.ALERTMANAGER_ALLOW_QUERY_AUTH = os.getenv("ALERTMANAGER_ALLOW_QUERY_AUTH", "false").lower().strip() in ("1", "true", "yes")
+        self.ALERT_COOLDOWN_SECONDS = int(os.getenv("ALERT_COOLDOWN_SECONDS", "300"))
+        self.SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
+        self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+        self.SMTP_USER = os.getenv("SMTP_USER", "")
+        self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+        self.SMTP_FROM = os.getenv("SMTP_FROM", "agentops-sre@localhost")
+        self.NOTIFICATION_EMAIL_TO = os.getenv("NOTIFICATION_EMAIL_TO", "")
         self.BASE_DIR = BASE_DIR
         self.POLICIES_PATH = os.getenv("POLICIES_PATH", str(BASE_DIR / "config" / "policies.yaml"))
         self.DATA_DIR = Path(os.getenv("AGENTOPS_DATA_DIR", str(BASE_DIR / "data")))

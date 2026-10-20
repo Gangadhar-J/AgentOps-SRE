@@ -1,6 +1,5 @@
 from agentops.llm.mock_provider import MockRuleBasedLLMProvider
 from agentops.models.evidence import (
-    EvidenceType,
     InvestigationContext,
     TelemetrySource,
     TelemetryStatus,

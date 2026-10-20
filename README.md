@@ -4,87 +4,74 @@
 
 ---
 
-## Current Release: v0.7.2 (Real AI Enforcement, Security Hardening & Unified Observability Console)
+## Current Release: v0.8.1 (Reliability & Test-Isolation Hardening)
 
-**AgentOps-SRE v0.7.2** represents a comprehensive hardening and observability release:
+**AgentOps-SRE v0.8.1** builds on the event-driven investigation platform of v0.8.0 by delivering **complete test-isolation hardening, formal test categorization, and worker lease reliability**:
 
-- **🚫 Real AI Enforcement**: Completely eliminated mock and deterministic RCA generation from all live investigation paths. Real LLMs (Ollama local models or configured Cloud providers) are strictly required for operational analysis.
-- **🛡️ Typed Error Taxonomy**: Stable error taxonomy (`LLMError`, `ProviderUnavailableError`, `ModelNotFoundError`, `InferenceTimeoutError`, `InvalidModelOutputError`, `EvidenceValidationError`, `ProviderAuthenticationError`, `RateLimitError`) mapping provider failures into transparent diagnostic records.
-- **🔎 Evidence Reference Validation**: Independent verification of model claims against ground-truth evidence items (`context.evidence_items`). Hallucinated or unsupported evidence IDs are rejected before reaching policy evaluation.
-- **🔒 Fail-Closed Security Invariant**: Failed inference, unvalidated RCAs, or unknown incident types never create actionable approvals. Unknown remediation actions fail closed (`action="none"`).
-- **🌐 Portable Configuration**: Dynamic `pathlib.Path` resolution, `KUBECONFIG` environment variable discovery, zero hardcoded developer paths, and default binding strictly to `127.0.0.1:8000`.
-- **🖥️ Unified 8-Section Operator Console**: Pure vanilla JavaScript and modern dark-mode CSS (zero npm or Node.js dependencies) running across 8 dedicated operational sections:
-  1. **📊 Overview**: Cluster infrastructure, telemetry health, live pulse, and latest incident snapshot.
-  2. **☸️ Cluster & Workloads**: Live topology, nodes conditions table, workload pod replicas, and warning events stream.
-  3. **🔍 Incident Investigation**: Multi-signal evidence collection, real LLM root cause analysis, grounded evidence pills, policy governance, and inline approval execution.
-  4. **🤖 LLM Observability**: 9-step visual lifecycle stepper (Configured → Reachable → Discovered → Selected → Invoked → Inference Done → Schema Valid → Evidence Grounded → Completed), inference latency, token metrics, generation speed (tok/s), and execution history table.
-  5. **🔎 Evidence Explorer**: Filterable multi-signal evidence cards across Kubernetes, Prometheus, and Loki with direct cross-linking.
-  6. **🛡️ Approvals & Remediation**: Human-in-the-loop authorization cards, single-use token consumption, and post-remediation rollout verification.
-  7. **📈 Evaluation & Regression**: Deterministic offline benchmark replay engine (v0.6), quality gate scoring (96.5%), and baseline regression tracking.
-  8. **🩺 Platform Diagnostics**: Real-time health matrix for Kubernetes API, Prometheus, Loki, Grafana, Ollama, and OpenTelemetry tracing.
-- **⚡ Isolated Demo Chaos Sandbox**: Modal playground strictly restricted to sandbox workload `demo/demo-app` (`crashloop`, `high-error-rate`, `resource-exhaustion`, `bad-deployment`, `reset`).
+- **🛡️ 100% Hermetic Unit Test Suite**: Decoupled unit tests from live Kubernetes clusters, Loki, Prometheus, and Ollama daemons using standardized in-memory test doubles (`MockSREMCPClient`). 173 unit tests pass in under 3.5 seconds with zero external dependencies.
+- **🏷️ Pytest Marker Architecture**: Clean test categorization via `pytest -m unit`, `pytest -m integration`, and `pytest -m scenario` to prevent ambient cluster states from polluting fast unit verification loops.
+- **💓 Adaptive Worker Heartbeat Lease Renewal**: Background heartbeat thread dynamically renews job leases at $\max(0.1, \min(40.0, \frac{\text{JOB\_LEASE\_SECONDS}}{3.0}))$, protecting long-running LLM investigations from false abandonment and split-brain execution.
+- **⏱️ Inference Timeout & Fail-Closed Guard**: Verified `InferenceTimeoutError` handling fails closed cleanly with zero mock fallback or unauthorized remediation mutations.
+- **⚙️ Multi-Tier CI Quality Workflows**: Fast, dependency-free pull request gate (`.github/workflows/ci.yml`) alongside a dedicated nightly disposable Kind cluster integration workflow (`.github/workflows/kind-integration.yml`).
+- **📋 Documented Operational Limits**: Clear operational baselines for local Ollama latency profiles, disposable runner requirements, and replay benchmark scopes.
+
+### Previous Milestone: v0.8.0 (Event-Driven Investigations & Operator Experience)
+
+The platform supports:
+- **🔄 Durable Asynchronous Investigation Engine**: SQLite WAL-mode transactional queue with dead worker lease recovery, stage progression tracking, and cooperative cancellation (`QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, `INCOMPLETE`, `CANCELLED`). `POST /api/incidents/investigate` returns `202 Accepted` immediately.
+- **⚡ Live SSE Progress Streaming**: Server-Sent Events endpoint (`/api/investigations/<job_id>/stream`) with monotonic event IDs, keep-alive heartbeat comments (`: ping`), terminal `event: done`, and `Last-Event-ID` reconnection resumption.
+- **📈 Grafana Dashboard Deep Integration**: Embedded dashboards via authenticated kiosk iframe or direct link (`GET /api/grafana/url`), origin validation, and query parameter isolation for Prometheus, Kubernetes, and Loki dashboards.
+- **🚨 Prometheus Alertmanager Ingestion**: Webhook endpoint (`POST /api/v1/alerts`) with Alertmanager v4 payload schema validation, workload target validation, deduplication against `alert_deduplication` table, 300s alert storm cooldown, and optional shared secret authentication.
+- **📧 SRE Operator Email Notifications**: SMTP delivery of investigation outcomes (`send_investigation_outcome_email`) with root cause summaries, confidence scores, and deep links to Web UI and Grafana dashboards.
+- **🧩 Modular Vanilla Frontend Architecture**: ES modules (`api.js`, `investigation.js`, `dashboards.js`, `alerts.js`, `app.js`), 10-section operator console with tabs for Grafana Dashboards and Alertmanager Activity (zero npm or Node.js dependencies).
+- **🔒 Autonomous Investigation, Controlled Remediation**: Webhooks and background workers can trigger investigations autonomously, but **never** authorize remediation. All remediation actions strictly require human approval through the policy engine and security gateway.
 
 ```text
-                         ┌──────────────────────────────────────────────┐
-                         │   SRE Operator (Unified 8-Section Console)   │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │              AgentOps REST API               │
-                         │         (/api/incidents/investigate)         │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │                  SRE Agent                   │
-                         │        (Evidence Collection via MCP)         │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │             Real LLM Reasoning               │
-                         │        (Local Ollama / Cloud Providers)      │
-                         │    [Strict Schema & Evidence Validation]     │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                          ActionRequest
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │                Policy Engine                 │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                        REQUIRE_APPROVAL
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │           Approval Manager (HITL)            │
-                         │          (Single-Use Approval Token)         │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                             APPROVED
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │               Security Gateway               │
-                         │       1. Re-validate Live State              │
-                         │       2. Pre-Remediation Snapshot            │
-                         │       3. Single-Use Token Consumption        │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │             Controlled Mutation              │
-                         │        (restart / scale / rollback)          │
-                         └──────────────────────┬───────────────────────┘
-                                                │
-                                                ▼
-                         ┌──────────────────────────────────────────────┐
-                         │        Post-Remediation Verification         │
-                         │       - Rollout Convergence Check            │
-                         │       - Pod Readiness & Health Check         │
-                         └──────────────────────────────────────────────┘
+       ┌───────────────────────────────┐        ┌───────────────────────────────┐
+       │   Prometheus Alertmanager     │        │    SRE Operator Console /     │
+       │   (Alert Evaluation Rules)    │        │       Direct API Request      │
+       └──────────────┬────────────────┘        └──────────────┬────────────────┘
+                      │ Webhook POST                           │ REST POST
+                      ▼                                        ▼
+       ┌────────────────────────────────────────────────────────────────────────┐
+       │                 Alertmanager Receiver & Webhook API                    │
+       │           (/api/v1/alerts - Payload Validation & Deduplication)        │
+       └───────────────────────────────────┬────────────────────────────────────┘
+                                           │ Enqueue Job
+                                           ▼
+       ┌────────────────────────────────────────────────────────────────────────┐
+       │            Durable SQLite Job Store & Investigation Worker             │
+       │         (WAL Mode, Lease Heartbeats, Cooperative Cancellation)         │
+       └─────────────────┬──────────────────────────────────┬───────────────────┘
+                         │ Progress Events                  │ Execute Investigation
+                         ▼                                  ▼
+       ┌───────────────────────────────────┐    ┌───────────────────────────────┐
+       │   Server-Sent Events (SSE) Stream │    │           SRE Agent           │
+       │   (/api/investigations/<id>/stream│    │ (Evidence Collection via MCP) │
+       └─────────────────┬─────────────────┘    └──────────────┬────────────────┘
+                         │                                     │
+                         ▼                                     ▼
+       ┌───────────────────────────────────┐    ┌───────────────────────────────┐
+       │     Live Operator UI Progress     │    │      Real LLM Reasoning       │
+       │  (Stages, Heartbeat, Cancel Btn)  │    │  (Ollama / OpenAI / Gemini)   │
+       └───────────────────────────────────┘    └──────────────┬────────────────┘
+                                                               │ ActionRequest
+                                                               ▼
+                                                ┌───────────────────────────────┐
+                                                │         Policy Engine         │
+                                                └──────────────┬────────────────┘
+                                                               │ REQUIRE_APPROVAL
+                                                               ▼
+                                                ┌───────────────────────────────┐
+                                                │    Approval Manager (HITL)    │
+                                                │  (Single-Use Approval Token)  │
+                                                └──────────────┬────────────────┘
+                                                               │ APPROVED
+                                                               ▼
+                                                ┌───────────────────────────────┐
+                                                │       Security Gateway        │
+                                                │ (Re-validate, Mutation, Verify)
+                                                └───────────────────────────────┘
 ```
 
 ---
@@ -111,11 +98,15 @@ make status
 
 ### 3. Launch the Unified Operator Console (Web UI)
 ```bash
-# Start the web console & REST API server
+# Start the web console & REST API server (starts in-process worker by default)
 make ui
 # or: make serve
+
+# Optional: Run a dedicated standalone worker in another terminal
+make worker
+# or: uv run python -m agentops.cli worker
 ```
-Open **`http://127.0.0.1:8000`** in your browser to access the 8-section console.
+Open **`http://127.0.0.1:8000`** in your browser to access the 10-section operator console.
 
 ---
 
@@ -143,6 +134,7 @@ uv run python -m agentops.cli incident demo/demo-app --auto-approve --operator s
 
 ## REST API Reference
 
+### Core & Observability
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/api/status` | `GET` | Live connectivity status for K8s, Prometheus, Loki, Grafana, Ollama, and Eval Gate |
@@ -154,7 +146,30 @@ uv run python -m agentops.cli incident demo/demo-app --auto-approve --operator s
 | `/api/telemetry/pulse?namespace=<ns>&workload=<wl>` | `GET` | Real-time multi-signal telemetry pulse with deep links |
 | `/api/llm/models` | `GET` | Auto-discover local Ollama models and configured cloud providers |
 | `/api/llm/history` | `GET` | Session history of executed LLM inferences with latency, tokens, and validation status |
-| `/api/incidents/investigate` | `POST` | Execute autonomous incident investigation and policy evaluation |
+
+### Asynchronous Investigation Queue & SSE
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/incidents/investigate` | `POST` | Enqueue asynchronous investigation job (`202 Accepted` with `job_id`, or `sync=True` fallback) |
+| `/api/investigations` | `GET` | List recent investigation jobs with state and trigger source |
+| `/api/investigations/<job_id>` | `GET` | Retrieve investigation job details and current stage |
+| `/api/investigations/<job_id>/events` | `GET` | Ordered diagnostic event history with `?after=<id>` pagination |
+| `/api/investigations/<job_id>/stream` | `GET` | Server-Sent Events (SSE) live progress stream with monotonic IDs and keep-alive |
+| `/api/investigations/<job_id>/result` | `GET` | Retrieve final `IncidentReport` (returns `409 Conflict` while running) |
+| `/api/investigations/<job_id>/cancel` | `POST` | Safely cancel a queued or running investigation job |
+| `/api/workers/status` | `GET` | Background worker queue depth, lease state, and active workers |
+
+### Grafana & Alertmanager Integration
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/grafana/dashboards` | `GET` | List available Grafana dashboards and health check |
+| `/api/grafana/url` | `GET` | Generate validated, sanitized kiosk-mode or direct dashboard URL |
+| `/api/v1/alerts` | `POST` | Ingest Prometheus Alertmanager webhook notifications with deduplication |
+| `/api/alerts/history` | `GET` | Retrieve history of ingested, deduplicated, and resolved alerts |
+
+### Approvals, Chaos & Evaluation
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
 | `/api/incidents/active` | `GET` | Retrieve current in-memory active incident report |
 | `/api/approvals/pending` | `GET` | List all pending human approval requests |
 | `/api/approvals/<id>/approve` | `POST` | Authorize and execute controlled remediation via SecurityGateway |
@@ -189,6 +204,10 @@ You can trigger reproducible incidents against the demo application:
 
 ## Agent Evaluation & Regression Quality Gate (v0.6 Engine)
 
+> [!NOTE]
+> **Replay Quality Gate vs. Live Diagnostic Accuracy**:
+> The 96.5% benchmark score across the 6 evaluation scenarios measures **regression safety, deterministic pipeline integrity, and security invariant enforcement** against recorded operational fixtures. It is **not equivalent to 96.5% live LLM production diagnostic accuracy** on novel, unobserved incidents. Live diagnostic accuracy is governed by real-time cluster telemetry quality, prompt grounding, and the selected real model (e.g. Qwen, Granite, Gemini, OpenAI).
+
 ```bash
 # 1. Run evaluation on a single scenario (replay mode)
 uv run python -m agentops.cli eval run --scenario crashloop-001 --mode replay
@@ -214,21 +233,29 @@ make eval-gate     # Automated CI quality gate
 ## Running Automated Tests
 
 ```bash
-# Run unit tests (133 tests: schemas, security, policy, gateway, API, workflows, real AI enforcement)
-make test
+# Run hermetic unit tests (173 tests: schemas, security, policy, gateway, API, workflows, worker recovery, SSE streaming, Alertmanager, Grafana)
+uv run pytest -m unit -v
 
-# Run API & Operator console tests
-make test-api
-
-# Run infrastructure & MCP pipeline integration tests (requires live Kind cluster)
-make test-infra
+# Run live infrastructure & MCP pipeline integration tests (requires live Kind cluster)
+uv run pytest -m integration -v
 
 # Run end-to-end incident investigation scenarios against live cluster
-make test-scenarios
+uv run pytest -m scenario -v
+
+# Run regression evaluation benchmark gate (Replay mode)
+uv run python -m agentops.cli eval gate --mode replay --provider mock
 
 # Run all test suites
-make test-all
+uv run pytest -v
 ```
+
+---
+
+## Known Operational Limits & Guidelines
+
+1. **Local LLM Latency Profiles**: When using local inference (`ollama` with `qwen3.5:2b`), reasoning across complete multi-signal evidence typically takes **50–215 seconds** depending on host hardware. The worker lease heartbeat protects against false expiration, but `LLM_TIMEOUT_SECONDS` must remain set to at least `300` in local testing. Cloud providers (`openai` or `gemini`) are recommended for low-latency operational environments.
+2. **Integration Test Environment**: The integration suite (`pytest -m integration`) and scenario suite (`pytest -m scenario`) require a running Kind cluster with NodePort mappings and the Prometheus/Loki/Alloy observability stack deployed. In CI/CD pipelines, this requires a Docker-enabled runner (e.g. GitHub Actions Ubuntu runner with `helm/kind-action`).
+3. **Replay Benchmark Scope**: The 96.5% evaluation score verifies regression safety, tool adherence, and authorization boundaries across fixed scenario replays. It serves as a safety and consistency quality gate, not a guarantee of diagnostic accuracy on unseen, arbitrary production failure modes.
 
 ---
 
@@ -252,6 +279,7 @@ make test-all
 - [docs/architecture/v0.5-controlled-remediation.md](docs/architecture/v0.5-controlled-remediation.md): v0.5 Controlled Remediation Architecture
 - [docs/architecture/v0.6-evaluation-observability.md](docs/architecture/v0.6-evaluation-observability.md): v0.6 Agent Evaluation & Observability Architecture
 - [docs/architecture/v0.7-operator-experience.md](docs/architecture/v0.7-operator-experience.md): v0.7 / v0.7.1 SRE Operator Console & REST API Architecture
+- [docs/architecture/v0.8-event-driven-investigations.md](docs/architecture/v0.8-event-driven-investigations.md): v0.8 Event-Driven Investigations & Operator Experience
 
 ---
 

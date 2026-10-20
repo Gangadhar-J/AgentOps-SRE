@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from agentops.config import settings
 from agentops.security.approval import ApprovalRecord, ApprovalRequest
 

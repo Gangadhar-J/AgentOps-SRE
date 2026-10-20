@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 import uuid
 import yaml
 from evaluation.models import BaselineRecord, EvaluationRunSummary

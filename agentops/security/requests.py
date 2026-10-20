@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 

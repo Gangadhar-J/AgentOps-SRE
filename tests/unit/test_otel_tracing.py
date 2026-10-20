@@ -1,4 +1,3 @@
-from opentelemetry import trace
 from agentops.observability.tracing import (
     get_tracer,
     sanitize_attributes,
@@ -27,6 +26,7 @@ def test_sanitize_attributes_redacts_secrets():
 
 def test_start_span_creates_valid_span():
     tracer = get_tracer("test-tracer")
+    assert tracer is not None
     with start_span("test.operation", attributes={"test.key": "val"}) as span:
         assert span is not None
         assert span.is_recording() is True

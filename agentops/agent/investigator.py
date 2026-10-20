@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 from agentops.agent.orchestrator import InvestigationOrchestrator
 from agentops.config import settings
 from agentops.llm.base import BaseLLMProvider
@@ -35,6 +35,8 @@ class SREAgent:
         namespace: Optional[str] = None,
         workload: str = "demo-app",
         incident_description: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
+        cancellation_check: Optional[Any] = None,
     ) -> RootCauseAnalysis:
         """
         Execute full incident investigation:
@@ -48,6 +50,13 @@ class SREAgent:
 
         logger.info(f"Starting incident investigation for workload '{workload}' in namespace '{ns}'")
 
+        if progress_callback:
+            progress_callback(
+                "collecting_kubernetes",
+                f"Gathering Kubernetes pod status and warning events for '{ns}/{workload}'...",
+                {"namespace": ns, "workload": workload},
+            )
+
         with start_span("agent.investigation", attributes={"kubernetes.namespace": ns, "kubernetes.workload": workload}):
             # Step 1: Gather multi-modal evidence context via MCP
             context, query_counts = self.orchestrator.collect_evidence(namespace=ns, workload=workload)
@@ -58,6 +67,18 @@ class SREAgent:
             # Track missing signals
             missing_signals = [k for k, v in context.telemetry_status.items() if not v.available]
 
+            if progress_callback:
+                progress_callback(
+                    "evidence_collection_completed",
+                    f"Evidence collection complete: {query_counts.get('k8s', 0)} k8s, {query_counts.get('prometheus', 0)} prom, {query_counts.get('loki', 0)} loki items.",
+                    {"query_counts": query_counts, "missing_signals": missing_signals},
+                )
+
+            # Check cancellation before dispatching expensive LLM inference
+            if cancellation_check and cancellation_check():
+                from agentops.worker.models import InvestigationCancelledError
+                raise InvestigationCancelledError("Investigation cancelled before LLM inference.")
+
             # Step 2: Reason over evidence to generate Root Cause Analysis
             errors = []
             error_cat = None
@@ -65,12 +86,32 @@ class SREAgent:
             schema_validated = False
             evidence_validated = False
 
+            if progress_callback:
+                raw_m = getattr(self.llm_provider, "model_name", "configured model")
+                progress_callback(
+                    "llm_inference_started",
+                    f"Invoking LLM reasoning engine with model '{raw_m}'...",
+                    {"model": raw_m},
+                )
+
             with start_span("agent.llm", attributes={"investigation.id": context.investigation_id}):
                 try:
                     rca, llm_meta = self.llm_provider.generate_rca(context)
                     validation_passed = True
                     schema_validated = True
                     evidence_validated = True
+
+                    if progress_callback:
+                        progress_callback(
+                            "llm_inference_completed",
+                            f"LLM inference completed in {llm_meta.get('latency_seconds', 0)}s.",
+                            llm_meta,
+                        )
+                        progress_callback(
+                            "validating_rca",
+                            "Validating RCA grounded evidence references and schema...",
+                            {"confidence": rca.confidence, "incident_type": str(rca.incident_type)},
+                        )
                 except Exception as e:
                     error_msg = str(e)
                     error_cat = getattr(e, "error_category", type(e).__name__)

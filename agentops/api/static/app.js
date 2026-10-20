@@ -19,12 +19,20 @@ async function initApp() {
   await loadClusterWorkloadData();
   await fetchLLMHistory();
 
+  // Resume any in-flight active investigation on browser refresh
+  if (window.resumeActiveInvestigation) {
+    await window.resumeActiveInvestigation();
+  }
+  if (window.loadAlertsHistory) {
+    await window.loadAlertsHistory();
+  }
+
   // Periodic background telemetry & status polling
   setInterval(fetchStatus, 5000);
   setInterval(fetchTelemetryPulse, 10000);
 }
 
-// ==================== 1. UNIFIED 8-SECTION NAVIGATION ====================
+// ==================== 1. UNIFIED 10-SECTION NAVIGATION ====================
 const sectionMap = {
   overview: { tab: "navTabOverview", sec: "sectionOverview" },
   cluster: { tab: "navTabCluster", sec: "sectionCluster" },
@@ -32,6 +40,8 @@ const sectionMap = {
   llm: { tab: "navTabLLM", sec: "sectionLLM" },
   evidence: { tab: "navTabEvidence", sec: "sectionEvidence" },
   approvals: { tab: "navTabApprovals", sec: "sectionApprovals" },
+  dashboards: { tab: "navTabDashboards", sec: "sectionDashboards" },
+  alerts: { tab: "navTabAlerts", sec: "sectionAlerts" },
   evaluation: { tab: "navTabEvaluation", sec: "sectionEvaluation" },
   diagnostics: { tab: "navTabDiagnostics", sec: "sectionDiagnostics" },
 };
@@ -67,6 +77,10 @@ function switchSection(sectionId) {
     fetchLLMHistory();
   } else if (sectionId === "approvals") {
     fetchApprovals();
+  } else if (sectionId === "dashboards") {
+    if (window.initDashboards) window.initDashboards();
+  } else if (sectionId === "alerts") {
+    if (window.loadAlertsHistory) window.loadAlertsHistory();
   } else if (sectionId === "diagnostics") {
     fetchStatus();
   }

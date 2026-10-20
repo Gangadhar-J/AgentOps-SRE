@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock, patch
-import pytest
 from agentops.clients.prometheus import PrometheusClient
 from agentops.clients.loki import LokiClient
 

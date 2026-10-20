@@ -63,6 +63,7 @@ status:
 	@echo "================================================================"
 	@echo "  Demo Application: http://localhost:30080"
 	@echo "  Prometheus UI:    http://localhost:30090"
+	@echo "  Alertmanager UI:  http://localhost:30093"
 	@echo "  Grafana UI:       http://localhost:30300 (Anonymous Admin)"
 	@echo "  Loki API:         http://localhost:31000"
 	@echo "================================================================"
@@ -97,6 +98,9 @@ ui: serve
 
 serve:
 	@uv run python -m agentops.cli serve --host 127.0.0.1 --port 8000
+
+worker:
+	@uv run python -m agentops.cli worker
 
 incident:
 	@uv run python -m agentops.cli incident demo/demo-app

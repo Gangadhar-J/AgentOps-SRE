@@ -1,5 +1,5 @@
 import pytest
-from agentops.models.evidence import EvidenceItem, EvidenceType, InvestigationContext, TelemetrySource
+from agentops.models.evidence import InvestigationContext, TelemetrySource
 from agentops.models.rca import IncidentSeverity, IncidentType, RootCauseAnalysis
 from agentops.models.remediation import RemediationResult, RemediationVerification
 from agentops.security.decision import PolicyDecision

@@ -1,7 +1,5 @@
-import pytest
 from agentops.agent.orchestrator import InvestigationOrchestrator
 from agentops.mcp.client import SREMCPClient
-from agentops.models.evidence import TelemetrySource
 
 
 def test_mcp_live_tools_execution():

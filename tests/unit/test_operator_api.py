@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
-import json
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import pytest
 
 from agentops.api.app import create_app
@@ -12,6 +11,7 @@ from agentops.security.approval import ApprovalManager
 from agentops.security.storage import SQLiteApprovalStore
 from agentops.security.gateway import SecurityGateway
 from agentops.security.policy import PolicyEngine
+from agentops.worker import JobStore
 
 
 @pytest.fixture
@@ -24,14 +24,15 @@ def temp_db():
 
 
 @pytest.fixture
-def test_app(temp_db):
+def test_app(temp_db, mock_orchestrator):
     store = SQLiteApprovalStore(db_path=temp_db)
+    job_store = JobStore(db_path=temp_db)
     appr_mgr = ApprovalManager(storage=store)
     policy_engine = PolicyEngine(policy_file="config/policies.yaml")
     gateway = SecurityGateway(policy_engine=policy_engine, approval_manager=appr_mgr)
-    workflow = IncidentWorkflowManager(gateway=gateway, approval_manager=appr_mgr)
+    workflow = IncidentWorkflowManager(gateway=gateway, approval_manager=appr_mgr, orchestrator=mock_orchestrator)
 
-    app = create_app(workflow_manager=workflow)
+    app = create_app(workflow_manager=workflow, job_store=job_store, start_worker=False)
     app.config["TESTING"] = True
     return app
 
@@ -53,35 +54,49 @@ def test_get_status_endpoint(client):
     assert res.status_code == 200
     data = res.get_json()
     assert data["status"] == "ok"
-    assert data["version"].startswith("0.7")
+    assert data["version"].startswith("0.8")
     assert "cluster" in data
     assert "components" in data
     assert "pending_approvals" in data
 
 
-def test_investigate_endpoint(client):
+def test_investigate_endpoint(test_app, client):
     res = client.post(
         "/api/incidents/investigate",
         json={"namespace": "demo", "workload": "demo-app", "provider": "mock", "dry_run": True},
     )
-    assert res.status_code == 200
+    assert res.status_code == 202
     data = res.get_json()
+    assert data["status"] == "accepted"
+    assert data["job_status"] == "QUEUED"
     assert data["workload"] == "demo-app"
-    assert data["status"] == "DRY_RUN_EVALUATED"
-    assert data["policy_decision"] == "REQUIRE_APPROVAL"
+
+    # Worker claims and completes the job
+    assert test_app.worker.run_once() is True
+
+    # Retrieve terminal result
+    res_result = client.get(f"/api/investigations/{data['job_id']}/result")
+    assert res_result.status_code == 200
+    res_data = res_result.get_json()
+    assert res_data["workload"] == "demo-app"
+    assert res_data["status"] == "DRY_RUN_EVALUATED"
+    assert res_data["policy_decision"] == "REQUIRE_APPROVAL"
 
 
-def test_active_incident_endpoint(client):
+def test_active_incident_endpoint(test_app, client):
     # Before investigation
     res1 = client.get("/api/incidents/active")
     assert res1.status_code == 200
     assert res1.get_json()["active_incident"] is None
 
     # After investigation
-    client.post(
+    inv_res = client.post(
         "/api/incidents/investigate",
         json={"namespace": "demo", "workload": "demo-app", "provider": "mock", "dry_run": False},
     )
+    assert inv_res.status_code == 202
+    test_app.worker.run_once()
+
     res2 = client.get("/api/incidents/active")
     assert res2.status_code == 200
     data = res2.get_json()
@@ -89,13 +104,18 @@ def test_active_incident_endpoint(client):
     assert data["approval_id"] is not None
 
 
-def test_approval_lifecycle_via_api(client):
+def test_approval_lifecycle_via_api(test_app, client):
     # 1. Investigate to generate pending approval
     inv_res = client.post(
         "/api/incidents/investigate",
         json={"namespace": "demo", "workload": "demo-app", "provider": "mock", "dry_run": False},
     )
-    app_id = inv_res.get_json()["approval_id"]
+    assert inv_res.status_code == 202
+    test_app.worker.run_once()
+
+    active_res = client.get("/api/incidents/active")
+    app_id = active_res.get_json()["approval_id"]
+    assert app_id is not None
 
     # 2. List pending approvals
     list_res = client.get("/api/approvals")
@@ -133,12 +153,17 @@ def test_approval_lifecycle_via_api(client):
         assert summary["mutation_status"] == "SUCCESS"
 
 
-def test_rejection_via_api(client):
+def test_rejection_via_api(test_app, client):
     inv_res = client.post(
         "/api/incidents/investigate",
         json={"namespace": "demo", "workload": "demo-app", "provider": "mock", "dry_run": False},
     )
-    app_id = inv_res.get_json()["approval_id"]
+    assert inv_res.status_code == 202
+    test_app.worker.run_once()
+
+    active_res = client.get("/api/incidents/active")
+    app_id = active_res.get_json()["approval_id"]
+    assert app_id is not None
 
     rej_res = client.post(
         f"/api/approvals/{app_id}/reject",

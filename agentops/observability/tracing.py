@@ -49,8 +49,8 @@ def init_tracer_provider() -> TracerProvider:
 
     resource = Resource.create({
         "service.name": "agentops-sre",
-        "service.version": "0.6.0",
-        "deployment.environment": "local",
+        "service.version": "0.8.1",
+        "deployment.environment": os.getenv("ENVIRONMENT", "local"),
     })
 
     provider = TracerProvider(resource=resource)

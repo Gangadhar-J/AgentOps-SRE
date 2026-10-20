@@ -1,24 +1,18 @@
-from datetime import datetime, timezone, timedelta
 import os
 import tempfile
 import time
 from unittest.mock import MagicMock
 import pytest
-from pydantic import ValidationError
 from agentops.security import (
     ActionRequest,
     ActionTarget,
     AgentIdentity,
     ApprovalManager,
-    ApprovalRecord,
-    ApprovalRequest,
     Capability,
     CapabilityConstraints,
     OperatorIdentity,
     PolicyDecision,
     PolicyEngine,
-    PolicyRule,
-    PolicySet,
     SecurityContext,
     SecurityGateway,
     SQLiteApprovalStore,

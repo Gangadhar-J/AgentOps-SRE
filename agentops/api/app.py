@@ -5,15 +5,23 @@ import re
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
-from flask import Flask, jsonify, render_template, request
+from urllib.parse import urlencode
+import uuid
+from flask import Flask, jsonify, render_template, request, Response
 import requests
 
+from agentops.alerts import AlertmanagerReceiver
 from agentops.clients.kubernetes import KubernetesInvestigationClient
 from agentops.clients.loki import LokiClient
 from agentops.clients.prometheus import PrometheusClient
 from agentops.config import settings
 from agentops.incident.models import IncidentReport
 from agentops.incident.orchestrator import IncidentOrchestrator as IncidentWorkflowManager
+from agentops.worker import (
+    JobStatus,
+    JobStore,
+    InvestigationWorker,
+)
 from evaluation.baseline import BaselineManager
 
 logger = logging.getLogger("agentops.api")
@@ -78,7 +86,11 @@ def _record_llm_execution(report: IncidentReport) -> None:
             _LLM_EXECUTION_HISTORY.pop(0)
 
 
-def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Flask:
+def create_app(
+    workflow_manager: Optional[IncidentWorkflowManager] = None,
+    job_store: Optional[JobStore] = None,
+    start_worker: Optional[bool] = None,
+) -> Flask:
     base_dir = os.path.abspath(os.path.dirname(__file__))
     template_dir = os.path.join(base_dir, "templates")
     static_dir = os.path.join(base_dir, "static")
@@ -90,6 +102,19 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
     )
 
     workflow = workflow_manager or IncidentWorkflowManager()
+    store = job_store or JobStore()
+    worker = InvestigationWorker(job_store=store, workflow_manager=workflow)
+    receiver = AlertmanagerReceiver(job_store=store)
+
+    is_testing = os.getenv("PYTEST_CURRENT_TEST") is not None
+    should_start = start_worker if start_worker is not None else (settings.IN_PROCESS_WORKER and not is_testing)
+    if should_start:
+        worker.start()
+
+    app.workflow_manager = workflow
+    app.job_store = store
+    app.worker = worker
+    app.receiver = receiver
     project_root = os.path.dirname(os.path.dirname(base_dir))
 
     @app.route("/")
@@ -154,7 +179,7 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         return jsonify(
             {
                 "status": "ok",
-                "version": "0.7.2",
+                "version": "0.8.1",
                 "components": {
                     "kubernetes": {
                         "connected": k8s_connected,
@@ -507,6 +532,9 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
         if source not in ("MANUAL", "ALERT", "DEMO"):
             source = "MANUAL"
 
+        idempotency_key = request.headers.get("Idempotency-Key") or payload.get("idempotency_key")
+        trace_id = request.headers.get("X-Trace-ID")
+
         try:
             namespace = validate_k8s_name(raw_ns, "namespace")
             workload = validate_k8s_name(raw_wl, "workload")
@@ -522,25 +550,214 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
                 "error": "Mock/Rule-based RCA generation is prohibited in live investigations. Select a real model (Ollama, OpenAI, or Gemini)."
             }), 400
 
-        try:
-            report = workflow.investigate_and_recommend(
-                namespace=namespace,
-                workload=workload,
-                incident_description=incident_description,
-                provider_name=provider,
-                model_name=model,
-                dry_run=dry_run,
-                source=source,
-            )
-            _record_llm_execution(report)
-            return jsonify(report.model_dump()), 200
-        except Exception as e:
-            logger.exception("Investigation execution failed")
+        # Check queue capacity
+        stats = store.get_queue_stats()
+        if stats["queued"] >= settings.JOB_QUEUE_MAX_SIZE:
             return jsonify({
                 "status": "error",
-                "error": str(e),
-                "error_category": getattr(e, "error_category", type(e).__name__),
+                "error": f"Investigation queue is at capacity ({settings.JOB_QUEUE_MAX_SIZE} jobs). Please wait for active investigations to complete.",
+                "error_category": "QueueCapacityExceededError",
+            }), 429
+
+        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        incident_id = f"inc-{uuid.uuid4().hex[:8]}"
+
+        try:
+            job, is_new = store.enqueue_job(
+                job_id=job_id,
+                incident_id=incident_id,
+                namespace=namespace,
+                workload=workload,
+                provider=provider,
+                model=model,
+                incident_description=incident_description,
+                dry_run=dry_run,
+                trigger_source=source,
+                idempotency_key=idempotency_key,
+                trace_id=trace_id,
+            )
+        except Exception as e:
+            logger.exception("Failed to enqueue investigation job")
+            return jsonify({"status": "error", "error": f"Failed to persist job: {str(e)}"}), 500
+
+        # Support synchronous execution if requested explicitly (e.g. for backward compatibility in select tests)
+        wait_sync = payload.get("wait", payload.get("sync", False)) or (request.args.get("sync") == "true")
+        if wait_sync:
+            worker.run_once()
+            updated_job = store.get_job(job.job_id)
+            if updated_job and updated_job.result:
+                _record_llm_execution(updated_job.result)
+                return jsonify(updated_job.result.model_dump()), 200
+            elif updated_job and updated_job.error_json:
+                return jsonify({"status": "error", "error": updated_job.error_json}), 500
+
+        # Return 202 Accepted per Phase 1 API contract
+        return jsonify({
+            "status": "accepted",
+            "job_id": job.job_id,
+            "incident_id": job.incident_id,
+            "job_status": job.status.value,
+            "stage": job.stage,
+            "namespace": job.namespace,
+            "workload": job.workload,
+            "provider": job.provider,
+            "model": job.model,
+            "created_at": job.created_at,
+            "is_new": is_new,
+        }), 202
+
+    @app.route("/api/investigations", methods=["GET"])
+    def list_investigations():
+        limit = request.args.get("limit", default=50, type=int)
+        status_filter = request.args.get("status")
+        jobs = store.list_jobs(limit=min(limit, 100), status=status_filter)
+        return jsonify({
+            "status": "ok",
+            "jobs": [j.model_dump() for j in jobs],
+            "count": len(jobs),
+        }), 200
+
+    @app.route("/api/investigations/<job_id>", methods=["GET"])
+    def get_investigation_job(job_id: str):
+        job = store.get_job(job_id)
+        if not job:
+            return jsonify({"status": "error", "error": f"Investigation job '{job_id}' not found"}), 404
+        return jsonify(job.model_dump()), 200
+
+    @app.route("/api/investigations/<job_id>/events", methods=["GET"])
+    def get_investigation_events(job_id: str):
+        job = store.get_job(job_id)
+        if not job:
+            return jsonify({"status": "error", "error": f"Investigation job '{job_id}' not found"}), 404
+        after_id = request.args.get("after", type=int)
+        events = store.get_events(job_id, after_id=after_id)
+        return jsonify({
+            "status": "ok",
+            "job_id": job_id,
+            "events": [e.model_dump() for e in events],
+            "count": len(events),
+        }), 200
+
+    @app.route("/api/investigations/<job_id>/result", methods=["GET"])
+    def get_investigation_result(job_id: str):
+        job = store.get_job(job_id)
+        if not job:
+            return jsonify({"status": "error", "error": f"Investigation job '{job_id}' not found"}), 404
+
+        if job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
+            return jsonify({
+                "status": "pending",
+                "job_status": job.status.value,
+                "stage": job.stage,
+                "message": f"Investigation is in stage '{job.stage}'",
+            }), 409
+
+        if job.status == JobStatus.CANCELLED:
+            return jsonify({
+                "status": "cancelled",
+                "job_status": job.status.value,
+                "message": "Investigation was cancelled by operator request",
+            }), 410
+
+        if job.result:
+            return jsonify(job.result.model_dump()), 200
+
+        if job.error_json:
+            return jsonify({
+                "status": "failed",
+                "error": job.error_json.get("error", "Unknown error"),
+                "error_category": job.error_json.get("error_category", "ExecutionError"),
             }), 500
+
+        return jsonify({"status": "unknown", "job_status": job.status.value}), 500
+
+    @app.route("/api/investigations/<job_id>/cancel", methods=["POST"])
+    def cancel_investigation(job_id: str):
+        job = store.get_job(job_id)
+        if not job:
+            return jsonify({"status": "error", "error": f"Investigation job '{job_id}' not found"}), 404
+
+        if job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
+            return jsonify({
+                "status": "terminal",
+                "message": f"Job is already in terminal state '{job.status.value}'",
+                "job_status": job.status.value,
+            }), 400
+
+        success = store.request_cancellation(job_id)
+        updated = store.get_job(job_id)
+        return jsonify({
+            "status": "ok",
+            "job_id": job_id,
+            "cancellation_requested": success,
+            "job_status": updated.status.value if updated else "UNKNOWN",
+        }), 200
+
+    @app.route("/api/investigations/<job_id>/stream", methods=["GET"])
+    def stream_investigation(job_id: str):
+        job = store.get_job(job_id)
+        if not job:
+            return jsonify({"status": "error", "error": f"Investigation job '{job_id}' not found"}), 404
+
+        last_id_header = request.headers.get("Last-Event-ID")
+        after_id = None
+        if last_id_header and last_id_header.isdigit():
+            after_id = int(last_id_header)
+        elif request.args.get("after"):
+            try:
+                after_id = int(request.args.get("after"))
+            except ValueError:
+                pass
+
+        def generate_sse():
+            nonlocal after_id
+            start_stream = time.time()
+            last_ping = time.time()
+            max_stream_time = settings.LLM_TIMEOUT_SECONDS + 60
+
+            while time.time() - start_stream < max_stream_time:
+                events = store.get_events(job_id, after_id=after_id)
+                for ev in events:
+                    after_id = ev.event_id
+                    data = json.dumps(ev.model_dump())
+                    yield f"id: {ev.event_id}\nevent: {ev.event_type}\ndata: {data}\n\n"
+
+                current_job = store.get_job(job_id)
+                if current_job and current_job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED):
+                    rem_events = store.get_events(job_id, after_id=after_id)
+                    for ev in rem_events:
+                        after_id = ev.event_id
+                        data = json.dumps(ev.model_dump())
+                        yield f"id: {ev.event_id}\nevent: {ev.event_type}\ndata: {data}\n\n"
+
+                    term_payload = json.dumps({
+                        "job_id": current_job.job_id,
+                        "status": current_job.status.value,
+                        "stage": current_job.stage,
+                    })
+                    yield f"event: done\ndata: {term_payload}\n\n"
+                    break
+
+                if time.time() - last_ping >= 10.0:
+                    yield ": ping\n\n"
+                    last_ping = time.time()
+
+                time.sleep(0.5)
+
+        return Response(
+            generate_sse(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.route("/api/workers/status", methods=["GET"])
+    def get_worker_status():
+        worker_status = worker.get_status()
+        return jsonify(worker_status.model_dump()), 200
 
     @app.route("/api/incidents/active", methods=["GET"])
     def get_active_incident():
@@ -668,6 +885,142 @@ def create_app(workflow_manager: Optional[IncidentWorkflowManager] = None) -> Fl
             )
         except Exception as e:
             return jsonify({"status": "unavailable", "type": "OFFLINE_EVALUATION_DATA", "error": str(e), "overall_score": None})
+
+    @app.route("/api/v1/alerts", methods=["POST"])
+    def receive_alertmanager_alerts():
+        # Enforce request payload size limit (max 512KB)
+        if request.content_length and request.content_length > 512 * 1024:
+            return jsonify({"status": "error", "error": "Alert payload exceeds 512KB limit"}), 413
+
+        # Validate authorization if configured
+        query_token = request.args.get("token") or request.args.get("secret")
+        if not receiver.validate_auth(request.headers, query_token):
+            return jsonify({"status": "unauthorized", "error": "Invalid or missing Alertmanager authentication token"}), 401
+
+        payload = request.get_json(silent=True)
+        if not payload or not isinstance(payload, dict):
+            return jsonify({"status": "error", "error": "Malformed or empty JSON payload"}), 400
+
+        trace_id = request.headers.get("X-Trace-ID")
+        try:
+            results = receiver.process_webhook(payload, trace_id=trace_id)
+        except Exception as e:
+            logger.exception("Error processing Alertmanager webhook")
+            return jsonify({"status": "error", "error": f"Failed to persist alert event: {str(e)}"}), 500
+
+        if not results:
+            return jsonify({"status": "ignored", "message": "No actionable alerts processed"}), 200
+
+        has_accepted = any(r.status == "accepted" for r in results)
+        all_rejected = all(r.status == "rejected" for r in results)
+        all_dedup = all(r.status == "deduplicated" for r in results)
+
+        resp_data = {
+            "status": "accepted" if has_accepted else ("deduplicated" if all_dedup else ("rejected" if all_rejected else "partial")),
+            "results": [r.model_dump() for r in results],
+        }
+        if has_accepted:
+            return jsonify(resp_data), 202
+        elif all_rejected:
+            return jsonify(resp_data), 400
+        else:
+            return jsonify(resp_data), 200
+
+    @app.route("/api/alerts/history", methods=["GET"])
+    def get_alerts_history():
+        limit = request.args.get("limit", default=50, type=int)
+        history = receiver.list_recent_alerts(limit=min(limit, 100))
+        return jsonify({"status": "ok", "alerts": history, "count": len(history)}), 200
+
+    @app.route("/api/grafana/dashboards", methods=["GET"])
+    def get_grafana_dashboards():
+        grafana_url = settings.GRAFANA_URL.rstrip('/')
+        is_reachable = False
+        try:
+            res = requests.get(f"{grafana_url}/api/health", timeout=1.5)
+            is_reachable = (res.status_code == 200)
+        except Exception:
+            is_reachable = False
+
+        dashboards = [
+            {
+                "id": "cluster-overview",
+                "title": "Cluster Overview",
+                "path": "/d/k8s-cluster",
+                "description": "High-level Kubernetes cluster nodes, pods, and namespace capacity",
+                "supports_workload_filter": False,
+            },
+            {
+                "id": "workload-detail",
+                "title": "Workload Telemetry & Pods",
+                "path": "/d/k8s-workload",
+                "description": "Pod readiness, restart backoff, and container state",
+                "supports_workload_filter": True,
+            },
+            {
+                "id": "resource-saturation",
+                "title": "Resource Saturation (CPU/Memory)",
+                "path": "/d/k8s-resources",
+                "description": "Memory leaks, OOMKilled risk, and CPU throttling",
+                "supports_workload_filter": True,
+            },
+            {
+                "id": "http-metrics",
+                "title": "Application HTTP Metrics & Latency",
+                "path": "/d/app-http",
+                "description": "HTTP 5xx error rate spikes and P95 latency distribution",
+                "supports_workload_filter": True,
+            },
+        ]
+
+        return jsonify({
+            "status": "ok",
+            "grafana_url": grafana_url,
+            "connected": is_reachable,
+            "dashboards": dashboards,
+        }), 200
+
+    @app.route("/api/grafana/url", methods=["GET"])
+    def get_grafana_url():
+        dash_id = request.args.get("dashboard_id", "cluster-overview")
+        raw_ns = request.args.get("namespace", "demo")
+        raw_wl = request.args.get("workload", "demo-app")
+        from_time = request.args.get("from", "now-1h")
+        to_time = request.args.get("to", "now")
+
+        try:
+            namespace = validate_k8s_name(raw_ns, "namespace")
+            workload = validate_k8s_name(raw_wl, "workload")
+        except ValueError as ve:
+            return jsonify({"status": "error", "error": str(ve)}), 400
+
+        grafana_url = settings.GRAFANA_URL.rstrip('/')
+        path_map = {
+            "cluster-overview": "/d/k8s-cluster",
+            "workload-detail": "/d/k8s-workload",
+            "resource-saturation": "/d/k8s-resources",
+            "http-metrics": "/d/app-http",
+        }
+        path = path_map.get(dash_id, "/d/k8s-cluster")
+
+        params = {
+            "from": from_time,
+            "to": to_time,
+            "var-namespace": namespace,
+            "var-workload": workload,
+        }
+        query_string = urlencode(params)
+        direct_url = f"{grafana_url}{path}?{query_string}"
+        embed_url = f"{grafana_url}{path}?{query_string}&kiosk=tv"
+
+        return jsonify({
+            "status": "ok",
+            "dashboard_id": dash_id,
+            "namespace": namespace,
+            "workload": workload,
+            "direct_url": direct_url,
+            "embed_url": embed_url,
+        }), 200
 
     return app
 

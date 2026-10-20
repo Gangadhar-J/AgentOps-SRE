@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
-import re
-from typing import Literal, Optional
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from agentops.security.identity import SECRET_PATTERNS
 

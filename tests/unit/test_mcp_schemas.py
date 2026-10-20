@@ -8,7 +8,6 @@ from agentops.mcp.schemas import (
     LokiSearchErrorsInput,
     PromQueryErrorRateInput,
     PromQueryLatencyInput,
-    PromQueryMemoryInput,
 )
 
 

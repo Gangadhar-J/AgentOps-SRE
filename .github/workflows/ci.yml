@@ -1,0 +1,41 @@
+name: AgentOps-SRE CI Quality Gate
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    name: Lint, Test & Evaluation Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install Dependencies
+        run: |
+          uv sync --extra dev
+
+      - name: Code Formatting & Linting Check (Ruff)
+        run: |
+          uv run ruff check .
+
+      - name: Run Hermetic Unit & Security Test Suite
+        run: |
+          uv run pytest -m unit -v
+
+      - name: Run Evaluation Benchmark Quality Gate (Replay Mode)
+        run: |
+          uv run python -m agentops.cli eval gate --mode replay --provider mock

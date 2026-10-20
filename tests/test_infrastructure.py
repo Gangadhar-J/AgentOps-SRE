@@ -1,7 +1,6 @@
 import subprocess
 import time
 import requests
-import pytest
 
 DEMO_APP_URL = "http://localhost:30080"
 PROMETHEUS_URL = "http://localhost:30090"

@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger("agentops.security.audit")

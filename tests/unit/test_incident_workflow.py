@@ -1,12 +1,11 @@
 from datetime import datetime, timezone
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import pytest
 
-from agentops.incident.models import EvidenceDetail, IncidentReport, RemediationExecutionSummary
+from agentops.incident.models import EvidenceDetail, IncidentReport
 from agentops.incident.orchestrator import IncidentWorkflowManager
-from agentops.models.rca import IncidentSeverity, IncidentType, RootCauseAnalysis
 from agentops.models.remediation import RemediationResult, RemediationVerification
 from agentops.security.approval import ApprovalManager
 from agentops.security.storage import SQLiteApprovalStore
@@ -24,12 +23,12 @@ def temp_db():
 
 
 @pytest.fixture
-def workflow_manager(temp_db):
+def workflow_manager(temp_db, mock_orchestrator):
     store = SQLiteApprovalStore(db_path=temp_db)
     appr_mgr = ApprovalManager(storage=store)
     policy_engine = PolicyEngine(policy_file="config/policies.yaml")
     gateway = SecurityGateway(policy_engine=policy_engine, approval_manager=appr_mgr)
-    return IncidentWorkflowManager(gateway=gateway, approval_manager=appr_mgr)
+    return IncidentWorkflowManager(gateway=gateway, approval_manager=appr_mgr, orchestrator=mock_orchestrator)
 
 
 def test_incident_models():

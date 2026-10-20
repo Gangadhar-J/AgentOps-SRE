@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -10,6 +9,7 @@ from agentops.security.approval import ApprovalManager
 from agentops.security.storage import SQLiteApprovalStore
 from agentops.security.gateway import SecurityGateway
 from agentops.security.policy import PolicyEngine
+from agentops.worker import JobStore
 
 
 @pytest.fixture
@@ -24,12 +24,13 @@ def temp_db():
 @pytest.fixture
 def test_app(temp_db):
     store = SQLiteApprovalStore(db_path=temp_db)
+    job_store = JobStore(db_path=temp_db)
     appr_mgr = ApprovalManager(storage=store)
     policy_engine = PolicyEngine(policy_file="config/policies.yaml")
     gateway = SecurityGateway(policy_engine=policy_engine, approval_manager=appr_mgr)
     workflow = IncidentWorkflowManager(gateway=gateway, approval_manager=appr_mgr)
 
-    app = create_app(workflow_manager=workflow)
+    app = create_app(workflow_manager=workflow, job_store=job_store, start_worker=False)
     app.config["TESTING"] = True
     return app
 
@@ -166,7 +167,7 @@ def test_demo_mode_isolation_blocks_non_demo_workloads(client):
     assert "strictly restricted to namespace 'demo'" in res2.get_json()["error"]
 
 
-def test_investigate_preserves_source_and_runtime_metadata(client):
+def test_investigate_preserves_source_and_runtime_metadata(test_app, client):
     """
     Verify investigation tracks source (MANUAL vs DEMO) and includes LLM runtime metadata.
     """
@@ -177,10 +178,16 @@ def test_investigate_preserves_source_and_runtime_metadata(client):
         "dry_run": True,
         "source": "MANUAL",
     })
-    assert res.status_code == 200
+    assert res.status_code == 202
     data = res.get_json()
-    assert data["source"] == "MANUAL"
-    assert "llm_runtime" in data
-    if data["llm_runtime"]:
-        assert data["llm_runtime"]["mode"] == "rule-engine"
-        assert data["llm_runtime"]["provider"] == "mock"
+    assert data["status"] == "accepted"
+
+    assert test_app.worker.run_once() is True
+    res_result = client.get(f"/api/investigations/{data['job_id']}/result")
+    assert res_result.status_code == 200
+    res_data = res_result.get_json()
+    assert res_data["source"] == "MANUAL"
+    assert "llm_runtime" in res_data
+    if res_data["llm_runtime"]:
+        assert res_data["llm_runtime"]["mode"] == "rule-engine"
+        assert res_data["llm_runtime"]["provider"] == "mock"

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AgentOps SRE — Unified Operator &amp; Observability Console</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.7.2">
+  <link rel="stylesheet" href="/static/styles.css?v=0.8.0">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -17,7 +17,7 @@
         <div class="brand-logo">🛡️</div>
         <div>
           <div class="brand-title">AgentOps SRE</div>
-          <div class="brand-subtitle">Operator Console &amp; Autonomous Control Gateway (v0.7.2)</div>
+          <div class="brand-subtitle">Operator Console &amp; Autonomous Control Gateway (v0.8.1)</div>
         </div>
       </div>
       <div class="nav-status">
@@ -72,6 +72,15 @@
           <span class="tab-icon">🛡️</span>
           <span class="tab-label">Approvals &amp; Remediation</span>
           <span id="pendingApprovalsPill" class="badge-count" style="display:none;">0</span>
+        </button>
+        <button id="navTabDashboards" class="console-nav-tab" onclick="switchSection('dashboards')">
+          <span class="tab-icon">📉</span>
+          <span class="tab-label">Grafana Dashboards</span>
+        </button>
+        <button id="navTabAlerts" class="console-nav-tab" onclick="switchSection('alerts')">
+          <span class="tab-icon">🔔</span>
+          <span class="tab-label">Alertmanager &amp; Events</span>
+          <span id="firingAlertsPill" class="badge-count" style="display:none;">0</span>
         </button>
         <button id="navTabEvaluation" class="console-nav-tab" onclick="switchSection('evaluation')">
           <span class="tab-icon">📈</span>
@@ -339,6 +348,39 @@
               </div>
             </div>
           </form>
+        </div>
+
+        <!-- Live Investigation Progress Card (Phase 1 & 2 SSE Streaming) -->
+        <div id="investigationProgressCard" class="card mt-4" style="display:none;">
+          <div class="card-header">
+            <div>
+              <h3>📡 Live Investigation Progress</h3>
+              <div class="flex-actions mt-1">
+                <span id="progJobId" class="mono text-muted text-sm">job-XXXXXXXX</span>
+                <span id="progStreamBadge" class="status-pill status-info">STREAMING</span>
+              </div>
+            </div>
+            <div class="flex-actions">
+              <span id="progElapsedTime" class="metric-val mono text-sm">0.0s</span>
+              <button id="btnCancelInvestigation" class="btn btn-secondary btn-sm" onclick="cancelCurrentInvestigation()">
+                🛑 Cancel Investigation
+              </button>
+            </div>
+          </div>
+
+          <!-- Progress Bar & Current Stage -->
+          <div class="progress-bar-container mt-2">
+            <div id="progCurrentStageBadge" class="stage-badge stage-queued">QUEUED</div>
+            <span id="progCurrentMessage" class="text-sm text-secondary">Awaiting worker claim...</span>
+          </div>
+
+          <!-- Live Stage Events Timeline -->
+          <div class="events-timeline mt-3">
+            <h4>Ordered Stage Events</h4>
+            <div id="progEventsList" class="prog-events-stream">
+              <!-- Dynamically populated SSE events -->
+            </div>
+          </div>
         </div>
 
         <!-- Investigation Results & RCA Panel -->
@@ -783,7 +825,7 @@
         <div class="config-summary-box mt-2">
           <div class="config-row">
             <span class="config-key">AgentOps Release:</span>
-            <span class="config-val mono">v0.7.2 (Real AI Enforcement &amp; Hardened Console)</span>
+            <span class="config-val mono">v0.8.1 (Reliability &amp; Test-Isolation Hardening)</span>
           </div>
           <div class="config-row">
             <span class="config-key">Server Host &amp; Port:</span>
@@ -801,6 +843,133 @@
             <span class="config-key">Arbitrary Shell Execution:</span>
             <span class="config-val mono text-success">Disabled &amp; Prohibited</span>
           </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 9: GRAFANA DASHBOARDS (Phase 3) -->
+    <main id="sectionDashboards" class="console-section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <h3>📉 Grafana Dashboards &amp; Observability</h3>
+            <p class="card-subtitle">Real cluster metrics, workload graphs, and deep-linked time ranges.</p>
+          </div>
+          <div class="flex-actions">
+            <span id="grafanaConnBadge" class="status-pill status-healthy">CONNECTED</span>
+            <a id="grafanaExternalLink" href="http://localhost:30300" target="_blank" class="btn btn-secondary btn-sm">
+              Open Grafana ↗
+            </a>
+          </div>
+        </div>
+
+        <div class="dashboard-controls-bar mt-3">
+          <div class="dash-tabs" id="dashButtonsContainer">
+            <button class="btn-dash active" data-dash-id="cluster-overview" onclick="selectDashboard('cluster-overview')">Cluster Overview</button>
+            <button class="btn-dash" data-dash-id="workload-detail" onclick="selectDashboard('workload-detail')">Workload Telemetry</button>
+            <button class="btn-dash" data-dash-id="resource-saturation" onclick="selectDashboard('resource-saturation')">CPU / Memory Saturation</button>
+            <button class="btn-dash" data-dash-id="http-metrics" onclick="selectDashboard('http-metrics')">HTTP Latency &amp; Errors</button>
+          </div>
+          <div class="dash-timerange-selector">
+            <label class="text-xs text-muted">Range:</label>
+            <select id="dashTimeRangeSelect" onchange="updateDashboardFrame()">
+              <option value="now-15m">Last 15m</option>
+              <option value="now-1h" selected>Last 1h</option>
+              <option value="now-6h">Last 6h</option>
+              <option value="now-24h">Last 24h</option>
+            </select>
+            <button class="btn-sm btn-secondary" onclick="reloadDashboardFrame()">🔄 Refresh</button>
+          </div>
+        </div>
+
+        <div class="dashboard-frame-container mt-3">
+          <div id="dashFallbackNotice" class="alert-box alert-info mb-2" style="display:none;">
+            <span>Embedding blocked by browser framing policy?</span>
+            <a id="dashDirectLink" href="#" target="_blank" class="text-accent underline font-bold ml-2">Open Directly in Grafana ↗</a>
+          </div>
+          <iframe id="grafanaFrame" class="grafana-iframe" src="" title="Grafana Dashboard" loading="lazy"></iframe>
+        </div>
+      </div>
+    </main>
+
+    <!-- SECTION 10: ALERTMANAGER & EVENTS (Phase 4) -->
+    <main id="sectionAlerts" class="console-section" style="display:none;">
+      <div class="overview-grid">
+        <!-- Ingestion Status & Configuration -->
+        <div class="card">
+          <div class="card-header">
+            <h3>🔔 Prometheus Alertmanager Integration</h3>
+            <span id="alertmanagerWebhookBadge" class="status-pill status-healthy">LISTENING</span>
+          </div>
+          <p class="text-sm text-secondary mt-1">
+            AgentOps-SRE receives real firing Prometheus alerts, evaluates storm controls &amp; deduplication, and queues autonomous investigations.
+          </p>
+
+          <div class="config-summary-box mt-3">
+            <div class="config-row">
+              <span class="config-key">Webhook Ingress:</span>
+              <span class="config-val mono">POST /api/v1/alerts</span>
+            </div>
+            <div class="config-row">
+              <span class="config-key">Deduplication Cooldown:</span>
+              <span class="config-val mono">300s (5 minutes)</span>
+            </div>
+            <div class="config-row">
+              <span class="config-key">Permitted Targets:</span>
+              <span class="config-val mono text-success">Strict K8s Workload Validation</span>
+            </div>
+            <div class="config-row">
+              <span class="config-key">Autonomous Triggering:</span>
+              <span class="config-val mono text-info">Investigation Only (No Auto-Remediation)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Simulated Alert Trigger for Testing -->
+        <div class="card">
+          <div class="card-header">
+            <h3>⚡ Test Alert Delivery</h3>
+          </div>
+          <p class="text-sm text-secondary mt-1">Send a synthetic firing Prometheus alert to verify webhook ingestion and deduplication.</p>
+          <div class="form-grid mt-2">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Alert Name</label>
+                <input type="text" id="testAlertName" value="DemoAppCrashLoop" class="input-text">
+              </div>
+              <div class="form-group">
+                <label>Target Workload</label>
+                <input type="text" id="testAlertWorkload" value="demo-app" class="input-text">
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="sendTestAlert()">Dispatch Test Alert Webhook</button>
+            <div id="testAlertFeedback" class="mt-2 text-xs mono" style="display:none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Alert History Table -->
+      <div class="card mt-4">
+        <div class="card-header">
+          <h3>📋 Alert Delivery &amp; Deduplication History</h3>
+          <button class="btn-sm btn-secondary" onclick="loadAlertsHistory()">🔄 Refresh</button>
+        </div>
+        <div class="table-responsive mt-2">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Alert Name</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Deliveries</th>
+                <th>Last Seen</th>
+                <th>Linked Investigation</th>
+              </tr>
+            </thead>
+            <tbody id="alertsHistoryBody">
+              <tr><td colspan="6" class="text-center text-muted">No alert events recorded yet.</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </main>
@@ -861,6 +1030,7 @@
 
   </div>
 
-  <script src="/static/app.js?v=0.7.2"></script>
+  <script type="module" src="/static/js/app.js?v=0.8.0"></script>
+  <script src="/static/app.js?v=0.8.0"></script>
 </body>
 </html>

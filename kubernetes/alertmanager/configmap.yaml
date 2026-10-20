@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      # Optional SMTP configuration example:
+      # smtp_smarthost: 'smtp.gmail.com:587'
+      # smtp_from: 'alertmanager@example.com'
+      # smtp_auth_username: 'alertmanager@example.com'
+      # smtp_auth_password: 'app-password'
+      # smtp_require_tls: true
+
+    route:
+      group_by: ['alertname', 'namespace', 'app', 'workload']
+      group_wait: 5s
+      group_interval: 15s
+      repeat_interval: 5m
+      receiver: 'agentops-webhook'
+      routes:
+      - receiver: 'agentops-webhook'
+        continue: true
+      # - receiver: 'email-notifications'
+      #   matchers:
+      #     - severity =~ "critical|warning"
+
+    receivers:
+    - name: 'agentops-webhook'
+      webhook_configs:
+      # Reaches the local AgentOps-SRE server running on host machine from inside Kind
+      - url: 'http://host.docker.internal:8000/api/v1/alerts'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+
+    # Example Alertmanager Email Receiver
+    # - name: 'email-notifications'
+    #   email_configs:
+    #   - to: 'sre-oncall@example.com'
+    #     send_resolved: true
+    #     headers:
+    #       subject: '[ALERT {{ .Status | toUpper }}] {{ .GroupLabels.alertname }} ({{ .GroupLabels.namespace }}/{{ .GroupLabels.app }})'

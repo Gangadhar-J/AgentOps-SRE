@@ -1,0 +1,50 @@
+name: AgentOps-SRE Live Infrastructure Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *' # Daily nightly regression at 04:00 UTC
+
+jobs:
+  kind-integration:
+    name: Kind Cluster & Live MCP Pipeline Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install Dependencies
+        run: |
+          uv sync --extra dev
+
+      - name: Create Disposable Kind Cluster
+        uses: helm/kind-action@v1.12.0
+        with:
+          config: kubernetes/kind-config.yaml
+          cluster_name: agentops
+
+      - name: Deploy Workloads & Observability Stack
+        run: |
+          chmod +x scripts/deploy-demo-app.sh scripts/deploy-observability.sh
+          ./scripts/deploy-demo-app.sh
+          ./scripts/deploy-observability.sh
+
+      - name: Run Live Infrastructure & MCP Integration Tests
+        run: |
+          uv run pytest -m integration -v
+
+      - name: Diagnostic Pod Dump on Failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl get events -A --sort-by='.metadata.creationTimestamp'
