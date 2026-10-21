@@ -626,14 +626,18 @@ async function fetchLLMModels() {
 
 function parseProviderAndModel(compoundVal) {
   if (!compoundVal) return { provider: "ollama", model: undefined };
+  const KNOWN_PROVIDERS = ["ollama", "openai", "gemini", "mock", "auto"];
   const idx = compoundVal.indexOf(":");
-  if (idx === -1) {
-    return { provider: compoundVal || "ollama", model: undefined };
+  if (idx !== -1) {
+    const pref = compoundVal.slice(0, idx).toLowerCase();
+    if (KNOWN_PROVIDERS.includes(pref)) {
+      return {
+        provider: pref,
+        model: compoundVal.slice(idx + 1) || undefined,
+      };
+    }
   }
-  return {
-    provider: compoundVal.slice(0, idx) || "ollama",
-    model: compoundVal.slice(idx + 1) || undefined,
-  };
+  return { provider: "ollama", model: compoundVal };
 }
 
 // 9-Step Lifecycle Visual Stepper Helper

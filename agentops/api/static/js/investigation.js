@@ -24,10 +24,14 @@ export async function startInvestigation() {
   // Parse provider:model compound string (e.g. "ollama:granite4.1:3b", "openai:gpt-4o", "mock")
   let provider = 'ollama';
   let model = modelCompound;
+  const KNOWN_PROVIDERS = ['ollama', 'openai', 'gemini', 'mock', 'auto'];
   if (modelCompound.includes(':')) {
     const idx = modelCompound.indexOf(':');
-    provider = modelCompound.slice(0, idx) || 'ollama';
-    model = modelCompound.slice(idx + 1) || undefined;
+    const pref = modelCompound.slice(0, idx).toLowerCase();
+    if (KNOWN_PROVIDERS.includes(pref)) {
+      provider = pref;
+      model = modelCompound.slice(idx + 1) || undefined;
+    }
   } else if (modelCompound === 'mock') {
     provider = 'mock';
     model = 'deterministic-rule-engine-v1';

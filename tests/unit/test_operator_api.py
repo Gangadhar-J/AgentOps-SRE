@@ -84,15 +84,45 @@ def test_investigate_endpoint(test_app, client):
 
 
 def test_investigate_endpoint_compound_model_string_normalization(test_app, client):
+    # Case 1: Provider prefix in model string with known provider
     res = client.post(
         "/api/incidents/investigate",
         json={"namespace": "demo", "workload": "demo-app", "model": "mock:deterministic-rule-engine-v1", "dry_run": True},
     )
     assert res.status_code == 202
-    data = res.get_json()
-    job = test_app.job_store.get_job(data["job_id"])
-    assert job.provider == "mock"
-    assert job.model == "deterministic-rule-engine-v1"
+    job1 = test_app.job_store.get_job(res.get_json()["job_id"])
+    assert job1.provider == "mock"
+    assert job1.model == "deterministic-rule-engine-v1"
+
+    # Case 2: Model tag contains a colon (e.g. Ollama granite4.1:3b) with provider prefix
+    res2 = client.post(
+        "/api/incidents/investigate",
+        json={"namespace": "demo", "workload": "demo-app", "model": "ollama:granite4.1:3b", "dry_run": True},
+    )
+    assert res2.status_code == 202
+    job2 = test_app.job_store.get_job(res2.get_json()["job_id"])
+    assert job2.provider == "ollama"
+    assert job2.model == "granite4.1:3b"
+
+    # Case 3: Model tag contains a colon without provider prefix
+    res3 = client.post(
+        "/api/incidents/investigate",
+        json={"namespace": "demo", "workload": "demo-app", "model": "granite4.1:3b", "dry_run": True},
+    )
+    assert res3.status_code == 202
+    job3 = test_app.job_store.get_job(res3.get_json()["job_id"])
+    assert job3.provider == "ollama"
+    assert job3.model == "granite4.1:3b"
+
+    # Case 4: Model tag contains a colon with explicit provider='ollama'
+    res4 = client.post(
+        "/api/incidents/investigate",
+        json={"namespace": "demo", "workload": "demo-app", "provider": "ollama", "model": "granite4.1:3b", "dry_run": True},
+    )
+    assert res4.status_code == 202
+    job4 = test_app.job_store.get_job(res4.get_json()["job_id"])
+    assert job4.provider == "ollama"
+    assert job4.model == "granite4.1:3b"
 
 
 def test_active_incident_endpoint(test_app, client):

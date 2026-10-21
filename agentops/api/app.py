@@ -528,12 +528,14 @@ def create_app(
         provider = payload.get("provider", "ollama")
         model = payload.get("model")
 
+        VALID_PROVIDERS = {"ollama", "openai", "gemini", "mock", "auto"}
         # Normalize compound model strings like "ollama:granite4.1:3b" or "openai:gpt-4o"
+        # Only split if the prefix is an actual known LLM provider, preserving model tags like "granite4.1:3b"
         if model and ":" in model:
             pref, actual_model = model.split(":", 1)
-            if "provider" not in payload or payload.get("provider") == "ollama":
-                provider = pref
-            model = actual_model
+            if pref.lower() in VALID_PROVIDERS:
+                provider = pref.lower()
+                model = actual_model
         dry_run = bool(payload.get("dry_run", False))
         source = payload.get("source", "MANUAL")
         if source not in ("MANUAL", "ALERT", "DEMO"):
