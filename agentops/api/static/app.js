@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function initApp() {
   await fetchStatus();
+  await fetchTelemetryPulse();
   await fetchEvalSummary();
   await fetchLLMModels();
   await fetchNamespaces();
@@ -331,7 +332,8 @@ async function loadClusterOverview() {
   try {
     const res = await fetch("/api/cluster/overview");
     if (!res.ok) return;
-    const data = await res.json();
+    const resData = await res.json();
+    const data = resData.cluster || resData;
 
     const tbody = document.getElementById("nodesTableBody");
     if (tbody) {
@@ -341,14 +343,17 @@ async function loadClusterOverview() {
         tbody.innerHTML = "";
         data.nodes.forEach((node) => {
           const tr = document.createElement("tr");
-          const isReady = node.status === "Ready";
+          const isReady = node.ready === true || node.status === "Ready";
+          const statusText = node.status || (isReady ? "Ready" : "NotReady");
+          const condText = node.condition_reason || node.condition || "Ready";
+          const archText = node.architecture || node.arch || "--";
           tr.innerHTML = `
             <td class="mono font-bold">${escapeHtml(node.name)}</td>
-            <td><span class="status-pill ${isReady ? "status-healthy" : "status-danger"}">${escapeHtml(node.status)}</span></td>
-            <td>${escapeHtml(node.condition || "Ready")}</td>
+            <td><span class="status-pill ${isReady ? "status-healthy" : "status-danger"}">${escapeHtml(statusText)}</span></td>
+            <td>${escapeHtml(condText)}</td>
             <td class="mono text-xs">${escapeHtml(node.kubelet_version || "--")}</td>
             <td class="text-xs">${escapeHtml(node.os_image || "--")}</td>
-            <td class="text-xs">${escapeHtml(node.arch || "--")}</td>
+            <td class="text-xs">${escapeHtml(archText)}</td>
           `;
           tbody.appendChild(tr);
         });
@@ -356,7 +361,7 @@ async function loadClusterOverview() {
     }
 
     const readyEl = document.getElementById("overviewNodesReady");
-    if (readyEl) readyEl.textContent = `${data.nodes_ready ?? 0} / ${data.node_count ?? 0}`;
+    if (readyEl) readyEl.textContent = `${data.nodes_ready ?? 0} / ${data.nodes_count ?? data.node_count ?? 0}`;
 
     const ctxEl = document.getElementById("overviewContextName");
     if (ctxEl) ctxEl.textContent = data.current_context || "--";
@@ -365,7 +370,7 @@ async function loadClusterOverview() {
     if (authEl) authEl.textContent = data.auth_mode || "kubeconfig";
 
     const nsCountEl = document.getElementById("overviewNsCount");
-    if (nsCountEl) nsCountEl.textContent = data.namespace_count ?? "--";
+    if (nsCountEl) nsCountEl.textContent = data.namespaces_count ?? data.namespace_count ?? "--";
   } catch (err) {
     console.error("Failed to load cluster overview:", err);
   }
@@ -477,13 +482,17 @@ async function loadClusterWorkloadData() {
         podsBody.innerHTML = "";
         pods.forEach((p) => {
           const tr = document.createElement("tr");
+          const podName = p.pod_name || p.name || "--";
+          const isReady = p.is_ready !== undefined ? p.is_ready : (p.ready !== undefined ? p.ready : false);
+          const stateReason = p.current_state_reason || p.state_reason || "--";
+          const termReason = p.last_termination_reason || p.termination_reason || "--";
           tr.innerHTML = `
-            <td class="mono font-bold">${escapeHtml(p.name)}</td>
+            <td class="mono font-bold">${escapeHtml(podName)}</td>
             <td><span class="status-pill ${p.phase === "Running" ? "status-healthy" : "status-danger"}">${escapeHtml(p.phase)}</span></td>
-            <td>${p.ready ? "✓ Ready" : "✗ Not Ready"}</td>
+            <td>${isReady ? "✓ Ready" : "✗ Not Ready"}</td>
             <td><strong class="${p.restart_count > 0 ? "text-danger" : ""}">${p.restart_count ?? 0}</strong></td>
-            <td class="mono text-xs">${escapeHtml(p.state_reason || "--")}</td>
-            <td class="text-xs text-muted">${escapeHtml(p.termination_reason || "--")}</td>
+            <td class="mono text-xs">${escapeHtml(stateReason)}</td>
+            <td class="text-xs text-muted">${escapeHtml(termReason)}</td>
           `;
           podsBody.appendChild(tr);
         });
