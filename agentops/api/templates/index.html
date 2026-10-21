@@ -17,7 +17,7 @@
         <div class="brand-logo">🛡️</div>
         <div>
           <div class="brand-title">AgentOps SRE</div>
-          <div class="brand-subtitle">Operator Console &amp; Autonomous Control Gateway (v0.8.1)</div>
+          <div class="brand-subtitle">Operator Console &amp; Autonomous Control Gateway (v0.9.0)</div>
         </div>
       </div>
       <div class="nav-status">
@@ -203,6 +203,39 @@
         </div>
         <div id="overviewActiveBody" class="active-incident-body">
           <p class="text-muted">No active incident under investigation. Navigate to <strong>Incident Investigation</strong> to trigger an autonomous analysis.</p>
+        </div>
+      </div>
+
+      <!-- Active & Recent Investigations Queue -->
+      <div id="investigationsQueueCard" class="card mt-4">
+        <div class="card-header">
+          <div>
+            <h3>⏱️ Active &amp; Recent Investigations</h3>
+            <p class="card-subtitle">Real-time status, execution metrics, and investigation history.</p>
+          </div>
+          <div class="flex-actions">
+            <span id="investigationsQueueCount" class="badge badge-info">0</span>
+            <button class="btn-sm btn-secondary" onclick="loadInvestigationsQueue()">🔄 Refresh Queue</button>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Job ID</th>
+                <th>Created</th>
+                <th>Target</th>
+                <th>Provider / Model</th>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Stage</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="investigationsQueueBody">
+              <tr><td colspan="8" class="text-center text-muted py-4">Loading investigations queue...</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </main>
@@ -1030,7 +1063,6 @@
 
   </div>
 
-  <script type="module" src="/static/js/app.js?v=0.8.1"></script>
-  <script src="/static/app.js?v=0.8.1"></script>
+  <script type="module" src="/static/js/app.js?v=0.9.0"></script>
 </body>
 </html>

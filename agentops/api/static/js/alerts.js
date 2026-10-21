@@ -26,7 +26,7 @@ export async function loadAlertsHistory() {
       : '<span class="status-pill status-healthy">RESOLVED</span>';
 
     const linkedJob = a.job_id
-      ? `<button class="btn-text-action mono" onclick="window.viewInvestigationJob('${a.job_id}')">${a.job_id}</button>`
+      ? `<button class="btn-text-action mono" onclick="window.viewInvestigationJob('${escapeHtml(a.job_id)}')">${escapeHtml(a.job_id)}</button>`
       : '<span class="text-muted">None</span>';
 
     return `

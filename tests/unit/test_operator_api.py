@@ -229,3 +229,64 @@ def test_eval_summary_endpoint(client):
     assert data["status"] == "ok"
     assert data["overall_score"] is not None
     assert data["passing"] is True
+
+
+def test_index_single_entrypoint_and_queue_dom(client):
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Authoritative entrypoint verification
+    assert '<script type="module" src="/static/js/app.js?v=0.9.0"></script>' in html
+    assert '<script src="/static/app.js' not in html
+
+    # Active & Recent Investigations Queue DOM elements
+    assert 'id="investigationsQueueCard"' in html
+    assert 'id="investigationsQueueBody"' in html
+    assert 'id="investigationsQueueCount"' in html
+    assert "loadInvestigationsQueue()" in html
+
+
+def test_investigations_queue_api(test_app, client):
+    # Initial empty list
+    res = client.get("/api/investigations")
+    assert res.status_code == 200
+    initial_data = res.get_json()
+    assert initial_data["status"] == "ok"
+    assert "jobs" in initial_data
+    assert initial_data["count"] == 0
+
+    # Create job 1
+    res1 = client.post(
+        "/api/incidents/investigate",
+        json={"namespace": "demo", "workload": "demo-app", "provider": "mock", "dry_run": True},
+    )
+    assert res1.status_code == 202
+    job1_id = res1.get_json()["job_id"]
+
+    # Create job 2
+    res2 = client.post(
+        "/api/incidents/investigate",
+        json={"namespace": "prod", "workload": "payment-svc", "provider": "mock", "dry_run": False},
+    )
+    assert res2.status_code == 202
+    job2_id = res2.get_json()["job_id"]
+
+    # Verify queue ordering (DESC: job 2 first, then job 1)
+    res_list = client.get("/api/investigations")
+    assert res_list.status_code == 200
+    data_list = res_list.get_json()
+    assert data_list["count"] == 2
+    assert len(data_list["jobs"]) == 2
+    assert data_list["jobs"][0]["job_id"] == job2_id
+    assert data_list["jobs"][0]["workload"] == "payment-svc"
+    assert data_list["jobs"][1]["job_id"] == job1_id
+    assert data_list["jobs"][1]["workload"] == "demo-app"
+
+    # Status filter
+    test_app.worker.run_once()  # completes job 1
+    res_succeeded = client.get("/api/investigations?status=SUCCEEDED")
+    assert res_succeeded.status_code == 200
+    succ_data = res_succeeded.get_json()
+    assert succ_data["count"] == 1
+    assert succ_data["jobs"][0]["job_id"] == job1_id

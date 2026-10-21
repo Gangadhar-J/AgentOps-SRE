@@ -91,3 +91,28 @@ export function connectSSE(url, { onEvent, onError, onComplete, lastEventId = nu
 
   return eventSource;
 }
+
+/**
+ * Safely escape HTML characters to prevent XSS.
+ */
+export function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Format ISO timestamp into local time string.
+ */
+export function formatTime(isoStr) {
+  if (!isoStr) return '--';
+  try {
+    return new Date(isoStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (e) {
+    return String(isoStr);
+  }
+}

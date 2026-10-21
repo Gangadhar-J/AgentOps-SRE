@@ -1683,3 +1683,16 @@ input[type="text"]:focus, select:focus {
   font-size: 0.85rem;
   width: 100%;
 }
+
+/* Section 1: Active & Recent Investigations Queue */
+.queue-row {
+  transition: background-color 0.15s ease;
+}
+
+.queue-row:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.text-xxs {
+  font-size: 0.7rem;
+}
