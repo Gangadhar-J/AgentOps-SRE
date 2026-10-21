@@ -527,6 +527,13 @@ def create_app(
         incident_description = payload.get("incident_description")
         provider = payload.get("provider", "ollama")
         model = payload.get("model")
+
+        # Normalize compound model strings like "ollama:granite4.1:3b" or "openai:gpt-4o"
+        if model and ":" in model:
+            pref, actual_model = model.split(":", 1)
+            if "provider" not in payload or payload.get("provider") == "ollama":
+                provider = pref
+            model = actual_model
         dry_run = bool(payload.get("dry_run", False))
         source = payload.get("source", "MANUAL")
         if source not in ("MANUAL", "ALERT", "DEMO"):

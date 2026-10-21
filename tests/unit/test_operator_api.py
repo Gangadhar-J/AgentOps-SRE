@@ -83,6 +83,18 @@ def test_investigate_endpoint(test_app, client):
     assert res_data["policy_decision"] == "REQUIRE_APPROVAL"
 
 
+def test_investigate_endpoint_compound_model_string_normalization(test_app, client):
+    res = client.post(
+        "/api/incidents/investigate",
+        json={"namespace": "demo", "workload": "demo-app", "model": "mock:deterministic-rule-engine-v1", "dry_run": True},
+    )
+    assert res.status_code == 202
+    data = res.get_json()
+    job = test_app.job_store.get_job(data["job_id"])
+    assert job.provider == "mock"
+    assert job.model == "deterministic-rule-engine-v1"
+
+
 def test_active_incident_endpoint(test_app, client):
     # Before investigation
     res1 = client.get("/api/incidents/active")

@@ -17,9 +17,21 @@ export function getActiveJobId() {
 export async function startInvestigation() {
   const ns = document.getElementById('invNamespaceSelect')?.value || 'demo';
   const wl = document.getElementById('invWorkloadSelect')?.value || 'demo-app';
-  const model = document.getElementById('invModelSelect')?.value;
+  const modelCompound = document.getElementById('invModelSelect')?.value || '';
   const desc = document.getElementById('invDescriptionInput')?.value;
   const dryRun = document.getElementById('invDryRunCheck')?.checked || false;
+
+  // Parse provider:model compound string (e.g. "ollama:granite4.1:3b", "openai:gpt-4o", "mock")
+  let provider = 'ollama';
+  let model = modelCompound;
+  if (modelCompound.includes(':')) {
+    const idx = modelCompound.indexOf(':');
+    provider = modelCompound.slice(0, idx) || 'ollama';
+    model = modelCompound.slice(idx + 1) || undefined;
+  } else if (modelCompound === 'mock') {
+    provider = 'mock';
+    model = 'deterministic-rule-engine-v1';
+  }
 
   // Real AI enforcement check in frontend
   if (!model && !document.getElementById('invModelSelect')?.disabled) {
@@ -36,6 +48,7 @@ export async function startInvestigation() {
   const payload = {
     namespace: ns,
     workload: wl,
+    provider: provider,
     model: model,
     incident_description: desc,
     dry_run: dryRun,
