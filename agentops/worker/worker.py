@@ -15,6 +15,7 @@ from agentops.worker.models import (
     WorkerStatus,
 )
 from agentops.worker.store import JobStore
+from agentops.observability.tracing import use_trace_context
 
 logger = logging.getLogger("agentops.worker")
 
@@ -158,14 +159,32 @@ class InvestigationWorker:
         )
         hb_thread.start()
 
-        def on_progress(stage: str, message: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        def on_progress(
+            stage: str,
+            message: str,
+            payload: Optional[Dict[str, Any]] = None,
+            event_type: str = "progress",
+            stage_status: Optional[str] = "running",
+            stage_start_time: Optional[str] = None,
+            stage_completed_time: Optional[str] = None,
+            duration_ms: Optional[float] = None,
+            evidence_count: Optional[int] = None,
+            trace_id: Optional[str] = None,
+        ) -> None:
             if lease_lost.is_set():
                 raise LostJobLeaseError(f"Lease on job '{job.job_id}' was lost or expired.")
             self.job_store.add_event(
                 job_id=job.job_id,
                 stage=stage,
                 message=message,
+                event_type=event_type,
                 payload=payload,
+                stage_status=stage_status,
+                stage_start_time=stage_start_time,
+                stage_completed_time=stage_completed_time,
+                duration_ms=duration_ms,
+                evidence_count=evidence_count,
+                trace_id=trace_id or job.trace_id,
             )
             # Instant renewal on stage transition
             self.job_store.renew_lease(
@@ -188,18 +207,20 @@ class InvestigationWorker:
             return
 
         try:
-            report = self.workflow_manager.investigate_and_recommend(
-                namespace=job.namespace,
-                workload=job.workload,
-                incident_description=job.incident_description,
-                provider_name=job.provider,
-                model_name=job.model,
-                dry_run=job.dry_run,
-                source=job.trigger_source,
-                incident_id=job.incident_id,
-                progress_callback=on_progress,
-                cancellation_check=check_cancellation,
-            )
+            with use_trace_context(job.traceparent):
+                report = self.workflow_manager.investigate_and_recommend(
+                    namespace=job.namespace,
+                    workload=job.workload,
+                    incident_description=job.incident_description,
+                    provider_name=job.provider,
+                    model_name=job.model,
+                    dry_run=job.dry_run,
+                    source=job.trigger_source,
+                    incident_id=job.incident_id,
+                    progress_callback=on_progress,
+                    cancellation_check=check_cancellation,
+                    trace_id=job.trace_id,
+                )
 
             if check_cancellation():
                 self.job_store.mark_cancelled(job.job_id)

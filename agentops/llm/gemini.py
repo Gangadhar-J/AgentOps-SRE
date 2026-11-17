@@ -137,12 +137,29 @@ class GeminiLLMProvider(BaseLLMProvider):
                     details={"invalid_evidence_ids": invalid_ids, "valid_evidence_ids": sorted(list(valid_evidence_ids))},
                 )
 
+        latency_sec = round(time.time() - start_time, 3)
+        prompt_tokens = data.get("usageMetadata", {}).get("promptTokenCount")
+        completion_tokens = data.get("usageMetadata", {}).get("candidatesTokenCount")
+        total_tokens = data.get("usageMetadata", {}).get("totalTokenCount") or (
+            (prompt_tokens + completion_tokens)
+            if (prompt_tokens is not None and completion_tokens is not None)
+            else None
+        )
+        tokens_per_sec = (
+            round(completion_tokens / latency_sec, 1)
+            if (completion_tokens and latency_sec > 0.05)
+            else None
+        )
+
         metadata = {
             "provider": "gemini",
             "model": self.model_name,
-            "latency_seconds": round(time.time() - start_time, 3),
-            "prompt_tokens": data.get("usageMetadata", {}).get("promptTokenCount"),
-            "completion_tokens": data.get("usageMetadata", {}).get("candidatesTokenCount"),
+            "latency_seconds": latency_sec,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "tokens_per_second": tokens_per_sec,
             "time_to_first_token": None,
+            "retry_count": 0,
         }
         return rca, metadata

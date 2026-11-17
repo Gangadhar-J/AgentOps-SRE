@@ -45,7 +45,7 @@ JobTriggerSource = Literal["UI", "CLI", "ALERT", "DEMO", "MANUAL"]
 
 
 class InvestigationEvent(BaseModel):
-    """An ordered lifecycle or stage progress event for an investigation job."""
+    """An ordered, structured lifecycle or stage progress event for an investigation job."""
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     event_id: int
@@ -53,6 +53,13 @@ class InvestigationEvent(BaseModel):
     event_type: str
     stage: str
     message: str
+    stage_status: Optional[str] = "running"
+    stage_start_time: Optional[str] = None
+    stage_completed_time: Optional[str] = None
+    duration_ms: Optional[float] = None
+    evidence_count: Optional[int] = None
+    trace_id: Optional[str] = None
+    schema_version: int = 1
     payload: Optional[Dict[str, Any]] = None
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -82,6 +89,7 @@ class InvestigationJob(BaseModel):
     retry_count: int = 0
     notification_sent: bool = False
     trace_id: Optional[str] = None
+    traceparent: Optional[str] = None
     error_json: Optional[Dict[str, Any]] = None
     result: Optional[IncidentReport] = None
 

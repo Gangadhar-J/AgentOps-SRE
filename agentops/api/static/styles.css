@@ -1616,6 +1616,37 @@ input[type="text"]:focus, select:focus {
 .prog-event-time { color: var(--text-muted); font-size: 0.7rem; }
 .prog-event-stage { font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 3px; }
 .prog-event-msg { color: #e2e8f0; flex: 1; }
+.prog-event-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+.prog-event-pill {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+.prog-event-pill.pill-duration {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+.prog-event-pill.pill-evidence {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+}
+.prog-event-pill.pill-status-completed {
+  color: #4ade80;
+}
+.prog-event-pill.pill-status-failed {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
+}
+.prog-event-pill.pill-status-running {
+  color: #fbbf24;
+}
 
 /* Phase 3 Grafana Dashboard Integration Styles */
 .dashboard-controls-bar {

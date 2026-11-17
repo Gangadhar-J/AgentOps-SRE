@@ -1,6 +1,8 @@
 import logging
+import time
 import uuid
-from typing import Dict, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple
 from agentops.mcp.client import SREMCPClient
 from agentops.models.evidence import (
     EvidenceType,
@@ -23,14 +25,24 @@ class InvestigationOrchestrator:
     def __init__(self, mcp_client: Optional[SREMCPClient] = None):
         self.mcp_client = mcp_client or SREMCPClient()
 
-    def collect_evidence(self, namespace: str, workload: str) -> Tuple[InvestigationContext, Dict[str, int]]:
+    def collect_evidence(
+        self,
+        namespace: str,
+        workload: str,
+        progress_callback: Optional[Any] = None,
+    ) -> Tuple[InvestigationContext, Dict[str, int]]:
         """
         Execute deterministic multi-signal evidence collection strictly via MCP.
         """
         with start_span("agent.mcp", attributes={"kubernetes.namespace": namespace, "kubernetes.workload": workload}):
-            return self._collect_evidence_internal(namespace, workload)
+            return self._collect_evidence_internal(namespace, workload, progress_callback=progress_callback)
 
-    def _collect_evidence_internal(self, namespace: str, workload: str) -> Tuple[InvestigationContext, Dict[str, int]]:
+    def _collect_evidence_internal(
+        self,
+        namespace: str,
+        workload: str,
+        progress_callback: Optional[Any] = None,
+    ) -> Tuple[InvestigationContext, Dict[str, int]]:
         inv_id = f"inv-{uuid.uuid4().hex[:8]}"
         context = InvestigationContext(
             investigation_id=inv_id,
@@ -49,6 +61,21 @@ class InvestigationOrchestrator:
         # -------------------------------------------------------------
         # 1. Kubernetes Investigation via MCP
         # -------------------------------------------------------------
+        k8s_start_dt = datetime.now(timezone.utc)
+        k8s_start_iso = k8s_start_dt.isoformat()
+        k8s_t0 = time.time()
+        k8s_evidence_before = len(context.evidence_items)
+
+        if progress_callback:
+            progress_callback(
+                stage="collecting_kubernetes",
+                message=f"Gathering Kubernetes pod status and warning events for '{namespace}/{workload}'...",
+                stage_status="running",
+                stage_start_time=k8s_start_iso,
+                payload={"namespace": namespace, "workload": workload},
+            )
+
+        k8s_failed = False
         try:
             # 1a. Call k8s_get_pod_health
             pod_summaries = self.mcp_client.call_tool(
@@ -112,6 +139,7 @@ class InvestigationOrchestrator:
                         )
 
         except Exception as e:
+            k8s_failed = True
             logger.error(f"Kubernetes MCP investigation failed: {str(e)}")
             context.telemetry_status["kubernetes"] = TelemetryStatus(
                 source=TelemetrySource.KUBERNETES,
@@ -126,10 +154,41 @@ class InvestigationOrchestrator:
                 evidence_type=EvidenceType.FACT,
                 severity="WARN",
             )
+        finally:
+            k8s_duration_ms = round((time.time() - k8s_t0) * 1000.0, 2)
+            k8s_completed_iso = datetime.now(timezone.utc).isoformat()
+            k8s_count = len(context.evidence_items) - k8s_evidence_before
+            k8s_status = "failed" if k8s_failed else ("no_data" if k8s_count == 0 else "completed")
+            if progress_callback:
+                progress_callback(
+                    stage="collecting_kubernetes",
+                    message=f"Kubernetes telemetry inspection completed: {k8s_count} evidence item(s) in {k8s_duration_ms}ms.",
+                    stage_status=k8s_status,
+                    stage_start_time=k8s_start_iso,
+                    stage_completed_time=k8s_completed_iso,
+                    duration_ms=k8s_duration_ms,
+                    evidence_count=k8s_count,
+                    payload={"query_count": query_counts["k8s"], "evidence_count": k8s_count},
+                )
 
         # -------------------------------------------------------------
         # 2. Prometheus Investigation via MCP
         # -------------------------------------------------------------
+        prom_start_dt = datetime.now(timezone.utc)
+        prom_start_iso = prom_start_dt.isoformat()
+        prom_t0 = time.time()
+        prom_evidence_before = len(context.evidence_items)
+
+        if progress_callback:
+            progress_callback(
+                stage="querying_prometheus",
+                message=f"Querying Prometheus TSDB metrics (error rates, resident memory) for '{workload}'...",
+                stage_status="running",
+                stage_start_time=prom_start_iso,
+                payload={"app": workload, "namespace": namespace},
+            )
+
+        prom_failed = False
         try:
             # 2a. Call prom_query_error_rate
             err_data = self.mcp_client.call_tool(
@@ -175,6 +234,7 @@ class InvestigationOrchestrator:
                 )
 
         except Exception as e:
+            prom_failed = True
             logger.error(f"Prometheus MCP investigation failed: {str(e)}")
             context.telemetry_status["prometheus"] = TelemetryStatus(
                 source=TelemetrySource.PROMETHEUS,
@@ -189,10 +249,41 @@ class InvestigationOrchestrator:
                 evidence_type=EvidenceType.FACT,
                 severity="WARN",
             )
+        finally:
+            prom_duration_ms = round((time.time() - prom_t0) * 1000.0, 2)
+            prom_completed_iso = datetime.now(timezone.utc).isoformat()
+            prom_count = len(context.evidence_items) - prom_evidence_before
+            prom_status = "failed" if prom_failed else ("no_data" if prom_count == 0 else "completed")
+            if progress_callback:
+                progress_callback(
+                    stage="querying_prometheus",
+                    message=f"Prometheus metrics collection completed: {prom_count} evidence item(s) in {prom_duration_ms}ms.",
+                    stage_status=prom_status,
+                    stage_start_time=prom_start_iso,
+                    stage_completed_time=prom_completed_iso,
+                    duration_ms=prom_duration_ms,
+                    evidence_count=prom_count,
+                    payload={"query_count": query_counts["prometheus"], "evidence_count": prom_count},
+                )
 
         # -------------------------------------------------------------
         # 3. Loki Investigation via MCP
         # -------------------------------------------------------------
+        loki_start_dt = datetime.now(timezone.utc)
+        loki_start_iso = loki_start_dt.isoformat()
+        loki_t0 = time.time()
+        loki_evidence_before = len(context.evidence_items)
+
+        if progress_callback:
+            progress_callback(
+                stage="querying_loki",
+                message=f"Searching Loki log aggregator for errors, stack traces, and crashes for '{namespace}/{workload}'...",
+                stage_status="running",
+                stage_start_time=loki_start_iso,
+                payload={"namespace": namespace, "app": workload},
+            )
+
+        loki_failed = False
         try:
             # 3a. Call loki_search_errors
             logs = self.mcp_client.call_tool(
@@ -233,6 +324,7 @@ class InvestigationOrchestrator:
                     )
 
         except Exception as e:
+            loki_failed = True
             logger.error(f"Loki MCP investigation failed: {str(e)}")
             context.telemetry_status["loki"] = TelemetryStatus(
                 source=TelemetrySource.LOKI,
@@ -247,6 +339,22 @@ class InvestigationOrchestrator:
                 evidence_type=EvidenceType.FACT,
                 severity="WARN",
             )
+        finally:
+            loki_duration_ms = round((time.time() - loki_t0) * 1000.0, 2)
+            loki_completed_iso = datetime.now(timezone.utc).isoformat()
+            loki_count = len(context.evidence_items) - loki_evidence_before
+            loki_status = "failed" if loki_failed else ("no_data" if loki_count == 0 else "completed")
+            if progress_callback:
+                progress_callback(
+                    stage="querying_loki",
+                    message=f"Loki log query completed: {loki_count} evidence item(s) in {loki_duration_ms}ms.",
+                    stage_status=loki_status,
+                    stage_start_time=loki_start_iso,
+                    stage_completed_time=loki_completed_iso,
+                    duration_ms=loki_duration_ms,
+                    evidence_count=loki_count,
+                    payload={"query_count": query_counts["loki"], "evidence_count": loki_count},
+                )
 
         context.telemetry_status["kubernetes"].query_count = query_counts["k8s"]
         context.telemetry_status["prometheus"].query_count = query_counts["prometheus"]

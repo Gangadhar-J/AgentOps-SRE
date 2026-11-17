@@ -66,16 +66,11 @@ class JobStore:
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     notification_sent INTEGER NOT NULL DEFAULT 0,
                     trace_id TEXT,
+                    traceparent TEXT,
                     error_json TEXT,
                     result_json TEXT
                 )
             """)
-
-            # Ensure notification_sent column exists in existing database files
-            try:
-                cursor.execute("ALTER TABLE investigation_jobs ADD COLUMN notification_sent INTEGER NOT NULL DEFAULT 0;")
-            except sqlite3.OperationalError:
-                pass
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS investigation_events (
@@ -84,10 +79,54 @@ class JobStore:
                     event_type TEXT NOT NULL,
                     stage TEXT NOT NULL,
                     message TEXT NOT NULL,
+                    stage_status TEXT DEFAULT 'running',
+                    stage_start_time TEXT,
+                    stage_completed_time TEXT,
+                    duration_ms REAL,
+                    evidence_count INTEGER,
+                    trace_id TEXT,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
                     payload_json TEXT,
                     timestamp TEXT NOT NULL
                 )
             """)
+
+            # Explicit schema check and migration for investigation_jobs
+            cursor.execute("PRAGMA table_info(investigation_jobs)")
+            job_columns = {col["name"] for col in cursor.fetchall()}
+            if "notification_sent" not in job_columns:
+                cursor.execute("ALTER TABLE investigation_jobs ADD COLUMN notification_sent INTEGER NOT NULL DEFAULT 0;")
+            if "traceparent" not in job_columns:
+                cursor.execute("ALTER TABLE investigation_jobs ADD COLUMN traceparent TEXT;")
+
+            # Post-migration verification for investigation_jobs
+            cursor.execute("PRAGMA table_info(investigation_jobs)")
+            verified_job_cols = {col["name"] for col in cursor.fetchall()}
+            if "traceparent" not in verified_job_cols:
+                raise RuntimeError("Database migration failed: missing column traceparent in investigation_jobs")
+
+            # Explicit schema check and migration for investigation_events
+            cursor.execute("PRAGMA table_info(investigation_events)")
+            event_columns = {col["name"] for col in cursor.fetchall()}
+            new_event_cols = {
+                "stage_status": "TEXT DEFAULT 'running'",
+                "stage_start_time": "TEXT",
+                "stage_completed_time": "TEXT",
+                "duration_ms": "REAL",
+                "evidence_count": "INTEGER",
+                "trace_id": "TEXT",
+                "schema_version": "INTEGER NOT NULL DEFAULT 1",
+            }
+            for col_name, col_def in new_event_cols.items():
+                if col_name not in event_columns:
+                    cursor.execute(f"ALTER TABLE investigation_events ADD COLUMN {col_name} {col_def};")
+
+            # Post-migration verification
+            cursor.execute("PRAGMA table_info(investigation_events)")
+            verified_columns = {col["name"] for col in cursor.fetchall()}
+            missing = set(new_event_cols.keys()) - verified_columns
+            if missing:
+                raise RuntimeError(f"Database migration failed: missing columns {missing} in investigation_events")
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS alert_deduplication (
@@ -122,6 +161,7 @@ class JobStore:
         trigger_source: JobTriggerSource = "UI",
         idempotency_key: Optional[str] = None,
         trace_id: Optional[str] = None,
+        traceparent: Optional[str] = None,
     ) -> Tuple[InvestigationJob, bool]:
         """
         Durably enqueue an investigation job before acknowledging acceptance.
@@ -148,8 +188,8 @@ class JobStore:
                     INSERT INTO investigation_jobs (
                         job_id, incident_id, status, stage, trigger_source,
                         namespace, workload, incident_description, provider,
-                        model, dry_run, idempotency_key, created_at, trace_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        model, dry_run, idempotency_key, created_at, trace_id, traceparent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     job_id,
                     incident_id,
@@ -165,18 +205,21 @@ class JobStore:
                     idempotency_key,
                     now,
                     trace_id,
+                    traceparent,
                 ))
 
                 # Insert initial queued event
                 cursor.execute("""
                     INSERT INTO investigation_events (
-                        job_id, event_type, stage, message, payload_json, timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        job_id, event_type, stage, message, stage_status, trace_id, payload_json, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     job_id,
                     "investigation_queued",
                     JobStage.QUEUED.value,
                     f"Investigation queued for workload '{namespace}/{workload}' using {provider}:{model or 'default'}",
+                    "running",
+                    trace_id,
                     json.dumps({"trigger_source": trigger_source}),
                     now,
                 ))
@@ -218,13 +261,14 @@ class JobStore:
             # 1a. Fail jobs that exceeded MAX_JOB_RETRIES due to expired worker leases
             max_retries = settings.MAX_JOB_RETRIES
             cursor.execute("""
-                SELECT job_id, worker_id, retry_count FROM investigation_jobs
+                SELECT job_id, worker_id, retry_count, trace_id FROM investigation_jobs
                 WHERE status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at < ? AND retry_count >= ? AND cancellation_requested = 0
             """, (JobStatus.RUNNING.value, now_str, max_retries))
             exhausted_rows = cursor.fetchall()
             for r in exhausted_rows:
                 jid = r["job_id"]
                 prev_w = r["worker_id"]
+                t_id = r["trace_id"]
                 cursor.execute("""
                     UPDATE investigation_jobs
                     SET status = ?, stage = ?, completed_at = ?, lease_expires_at = NULL, error_json = ?
@@ -243,26 +287,29 @@ class JobStore:
                 ))
                 cursor.execute("""
                     INSERT INTO investigation_events (
-                        job_id, event_type, stage, message, payload_json, timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        job_id, event_type, stage, message, stage_status, trace_id, payload_json, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     jid,
                     "lease_exhausted",
                     JobStage.FAILED.value,
-                    f"Job failed: exceeded maximum retries ({max_retries}) due to worker lease timeouts",
-                    json.dumps({"worker_id": prev_w, "max_retries": max_retries}),
+                    f"Job abandoned by worker '{prev_w}' and exceeded max retries ({max_retries}). Marked as FAILED.",
+                    "failed",
+                    t_id,
+                    json.dumps({"worker_id": prev_w, "retry_count": max_retries}),
                     now_str,
                 ))
 
             # 1b. Recover expired leases whose retry_count < MAX_JOB_RETRIES
             cursor.execute("""
-                SELECT job_id, worker_id, retry_count FROM investigation_jobs
+                SELECT job_id, worker_id, retry_count, trace_id FROM investigation_jobs
                 WHERE status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at < ? AND retry_count < ? AND cancellation_requested = 0
             """, (JobStatus.RUNNING.value, now_str, max_retries))
             recoverable_rows = cursor.fetchall()
             for r in recoverable_rows:
                 jid = r["job_id"]
                 prev_w = r["worker_id"]
+                t_id = r["trace_id"]
                 new_retry = r["retry_count"] + 1
                 cursor.execute("""
                     UPDATE investigation_jobs
@@ -271,13 +318,15 @@ class JobStore:
                 """, (JobStatus.QUEUED.value, new_retry, jid, JobStatus.RUNNING.value))
                 cursor.execute("""
                     INSERT INTO investigation_events (
-                        job_id, event_type, stage, message, payload_json, timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        job_id, event_type, stage, message, stage_status, trace_id, payload_json, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     jid,
                     "lease_recovered",
                     JobStage.QUEUED.value,
                     f"Job lease expired (worker '{prev_w}' unresponsive); re-queued for retry (attempt {new_retry}/{max_retries})",
+                    "running",
+                    t_id,
                     json.dumps({"prev_worker_id": prev_w, "retry_count": new_retry}),
                     now_str,
                 ))
@@ -354,6 +403,13 @@ class JobStore:
         message: str,
         event_type: str = "progress",
         payload: Optional[Dict[str, Any]] = None,
+        stage_status: Optional[str] = "running",
+        stage_start_time: Optional[str] = None,
+        stage_completed_time: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        evidence_count: Optional[int] = None,
+        trace_id: Optional[str] = None,
+        schema_version: int = 1,
     ) -> InvestigationEvent:
         """Record an ordered progress event and update current job stage."""
         now = datetime.now(timezone.utc).isoformat()
@@ -363,9 +419,15 @@ class JobStore:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO investigation_events (
-                    job_id, event_type, stage, message, payload_json, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (job_id, event_type, stage, message, payload_str, now))
+                    job_id, event_type, stage, message, stage_status,
+                    stage_start_time, stage_completed_time, duration_ms,
+                    evidence_count, trace_id, schema_version, payload_json, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                job_id, event_type, stage, message, stage_status,
+                stage_start_time, stage_completed_time, duration_ms,
+                evidence_count, trace_id, schema_version, payload_str, now
+            ))
             event_id = cursor.lastrowid
 
             # Keep job's current stage in sync
@@ -383,6 +445,13 @@ class JobStore:
             event_type=event_type,
             stage=stage,
             message=message,
+            stage_status=stage_status,
+            stage_start_time=stage_start_time,
+            stage_completed_time=stage_completed_time,
+            duration_ms=duration_ms,
+            evidence_count=evidence_count,
+            trace_id=trace_id,
+            schema_version=schema_version,
             payload=payload,
             timestamp=now,
         )
@@ -427,13 +496,15 @@ class JobStore:
 
             cursor.execute("""
                 INSERT INTO investigation_events (
-                    job_id, event_type, stage, message, payload_json, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    job_id, event_type, stage, message, stage_status, trace_id, payload_json, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id,
                 "investigation_completed" if is_success else "investigation_failed",
                 stage,
                 f"Investigation finished with status: {report.status} (Diagnosis: {report.incident_type})",
+                "completed" if is_success else "failed",
+                getattr(report, "trace_id", None),
                 json.dumps({
                     "incident_id": report.incident_id,
                     "confidence": report.confidence,
@@ -493,13 +564,15 @@ class JobStore:
 
             cursor.execute("""
                 INSERT INTO investigation_events (
-                    job_id, event_type, stage, message, payload_json, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    job_id, event_type, stage, message, stage_status, trace_id, payload_json, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id,
                 "investigation_failed" if not is_incomplete else "investigation_incomplete",
                 stage,
                 f"Investigation failed: {error_message}",
+                "failed" if not is_incomplete else "incomplete",
+                None,
                 json.dumps(err_dict),
                 now,
             ))
@@ -542,13 +615,14 @@ class JobStore:
             if cursor.rowcount > 0:
                 cursor.execute("""
                     INSERT INTO investigation_events (
-                        job_id, event_type, stage, message, payload_json, timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        job_id, event_type, stage, message, stage_status, payload_json, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     job_id,
                     "investigation_cancelled",
                     JobStage.CANCELLED.value,
                     "Investigation cancelled before execution by operator request",
+                    "cancelled",
                     None,
                     now,
                 ))
@@ -578,13 +652,14 @@ class JobStore:
 
             cursor.execute("""
                 INSERT INTO investigation_events (
-                    job_id, event_type, stage, message, payload_json, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    job_id, event_type, stage, message, stage_status, payload_json, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id,
                 "investigation_cancelled",
                 JobStage.CANCELLED.value,
                 "Investigation aborted by operator cancellation",
+                "cancelled",
                 None,
                 now,
             ))
@@ -683,6 +758,7 @@ class JobStore:
             retry_count=row["retry_count"],
             notification_sent=bool(row["notification_sent"]) if "notification_sent" in row.keys() else False,
             trace_id=row["trace_id"],
+            traceparent=row["traceparent"] if "traceparent" in row.keys() else None,
             error_json=error_data,
             result=result,
         )
@@ -690,12 +766,20 @@ class JobStore:
     def _row_to_event(self, row: sqlite3.Row) -> InvestigationEvent:
         p_json = row["payload_json"]
         payload = json.loads(p_json) if p_json else None
+        keys = row.keys()
         return InvestigationEvent(
             event_id=row["id"],
             job_id=row["job_id"],
             event_type=row["event_type"],
             stage=row["stage"],
             message=row["message"],
+            stage_status=row["stage_status"] if "stage_status" in keys else "running",
+            stage_start_time=row["stage_start_time"] if "stage_start_time" in keys else None,
+            stage_completed_time=row["stage_completed_time"] if "stage_completed_time" in keys else None,
+            duration_ms=row["duration_ms"] if "duration_ms" in keys else None,
+            evidence_count=row["evidence_count"] if "evidence_count" in keys else None,
+            trace_id=row["trace_id"] if "trace_id" in keys else None,
+            schema_version=row["schema_version"] if "schema_version" in keys else 1,
             payload=payload,
             timestamp=row["timestamp"],
         )

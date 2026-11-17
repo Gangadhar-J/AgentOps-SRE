@@ -127,6 +127,17 @@ export function showProgressCard(jobData) {
   const jobIdEl = document.getElementById('progJobId');
   if (jobIdEl) jobIdEl.textContent = jobData.job_id || '--';
 
+  const traceBadge = document.getElementById('progTraceIdBadge');
+  if (traceBadge) {
+    if (jobData.trace_id) {
+      traceBadge.style.display = 'inline-block';
+      traceBadge.textContent = `Trace: ${jobData.trace_id.slice(0, 8)}...`;
+      traceBadge.title = `W3C Trace ID: ${jobData.trace_id}`;
+    } else {
+      traceBadge.style.display = 'none';
+    }
+  }
+
   const badgeEl = document.getElementById('progCurrentStageBadge');
   if (badgeEl) {
     badgeEl.textContent = (jobData.stage || 'QUEUED').toUpperCase();
@@ -196,6 +207,7 @@ export function attachStreamListener(jobId, startEventId = null) {
 function handleProgressEvent(event) {
   const stage = event.stage || 'progress';
   const msg = event.message || '';
+  const stageStatus = event.stage_status || (stage === 'completed' ? 'completed' : (stage === 'failed' ? 'failed' : 'running'));
 
   // Update current stage pill
   const stageBadge = document.getElementById('progCurrentStageBadge');
@@ -209,21 +221,55 @@ function handleProgressEvent(event) {
     msgEl.textContent = msg;
   }
 
-  // Append to ordered events stream
+  // Update trace ID badge if available
+  if (event.trace_id) {
+    const traceBadge = document.getElementById('progTraceIdBadge');
+    if (traceBadge) {
+      traceBadge.style.display = 'inline-block';
+      traceBadge.textContent = `Trace: ${event.trace_id.slice(0, 8)}...`;
+      traceBadge.title = `W3C Trace ID: ${event.trace_id}`;
+    }
+  }
+
+  // Append or update ordered events stream (deduplicate by event_id on reconnect)
   const eventsList = document.getElementById('progEventsList');
   if (eventsList) {
-    const row = document.createElement('div');
-    row.className = 'prog-event-item';
-    row.innerHTML = `
+    const eventKey = event.event_id ? `prog-event-${event.event_id}` : null;
+    let row = eventKey ? document.getElementById(eventKey) : null;
+
+    let metaHtml = '';
+    if (event.duration_ms != null) {
+      const durText = event.duration_ms < 1000 ? `${event.duration_ms}ms` : `${(event.duration_ms / 1000).toFixed(2)}s`;
+      metaHtml += `<span class="prog-event-pill pill-duration" title="Stage Execution Duration">⏱ ${durText}</span>`;
+    }
+    if (event.evidence_count != null && event.evidence_count > 0) {
+      metaHtml += `<span class="prog-event-pill pill-evidence" title="Collected Evidence Items">+${event.evidence_count} items</span>`;
+    }
+    if (stageStatus && stageStatus !== 'running') {
+      const statusClass = stageStatus === 'completed' ? 'pill-status-completed' : (stageStatus === 'failed' ? 'pill-status-failed' : 'pill-status-running');
+      metaHtml += `<span class="prog-event-pill ${statusClass}">${escapeHtml(stageStatus.toUpperCase())}</span>`;
+    }
+
+    const contentHtml = `
       <span class="prog-event-time">${formatTime(event.timestamp)}</span>
       <span class="prog-event-stage stage-${stage}">${escapeHtml(stage.toUpperCase())}</span>
       <span class="prog-event-msg">${escapeHtml(msg)}</span>
+      ${metaHtml ? `<div class="prog-event-meta">${metaHtml}</div>` : ''}
     `;
-    eventsList.appendChild(row);
-    eventsList.scrollTop = eventsList.scrollHeight;
+
+    if (row) {
+      row.innerHTML = contentHtml;
+    } else {
+      row = document.createElement('div');
+      row.className = 'prog-event-item';
+      if (eventKey) row.id = eventKey;
+      row.innerHTML = contentHtml;
+      eventsList.appendChild(row);
+      eventsList.scrollTop = eventsList.scrollHeight;
+    }
   }
 
-  if (stage === 'completed' || stage === 'failed' || stage === 'cancelled') {
+  if (stage === 'completed' || stage === 'failed' || stage === 'cancelled' || stageStatus === 'failed') {
     onInvestigationFinished(event.job_id || activeJobId);
   }
 }

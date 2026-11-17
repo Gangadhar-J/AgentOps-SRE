@@ -18,7 +18,7 @@ from agentops.llm.gemini import GeminiLLMProvider
 from agentops.llm.mock_provider import MockRuleBasedLLMProvider
 from agentops.llm.openai_provider import OpenAILLMProvider
 from agentops.models.rca import IncidentType, RootCauseAnalysis
-from agentops.observability.tracing import start_span
+from agentops.observability.tracing import start_span, get_current_trace_id
 from agentops.security.approval import ApprovalManager
 from agentops.security.capabilities import Capability, CapabilityConstraints
 from agentops.security.context import SecurityContext
@@ -126,6 +126,7 @@ class IncidentWorkflowManager:
         progress_callback: Optional[Any] = None,
         cancellation_check: Optional[Any] = None,
         orchestrator: Optional[Any] = None,
+        trace_id: Optional[str] = None,
     ) -> IncidentReport:
         """
         Run end-to-end investigation, produce RCA, independently validate evidence references,
@@ -203,9 +204,10 @@ class IncidentWorkflowManager:
                     time_to_first_token=m.time_to_first_token,
                     status=status_str,
                     error_category=m.error_category,
+                    retry_count=getattr(m, "retry_count", 0),
                     schema_validated=m.schema_validated,
                     evidence_validated=m.evidence_validated,
-                    trace_id=incident_id,
+                    trace_id=trace_id or get_current_trace_id() or incident_id,
                 )
 
             # Map RCA to policy-governed remediation action
@@ -292,9 +294,10 @@ class IncidentWorkflowManager:
 
                 if progress_callback:
                     progress_callback(
-                        "evaluating_policy",
-                        f"Evaluating security policy and risk constraints for action '{action_name}'...",
-                        {"action": action_name, "target_resource": f"{namespace}/{workload}"},
+                        stage="evaluating_policy",
+                        message=f"Evaluating security policy and risk constraints for action '{action_name}'...",
+                        stage_status="running",
+                        payload={"action": action_name, "target_resource": f"{namespace}/{workload}"},
                     )
 
                 if dry_run:

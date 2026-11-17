@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
-IncidentSource = Literal["MANUAL", "ALERT", "DEMO"]
+IncidentSource = Literal["MANUAL", "ALERT", "DEMO", "UI", "CLI", "EVAL"]
 
 
 class LLMRuntime(BaseModel):
@@ -20,6 +20,7 @@ class LLMRuntime(BaseModel):
     time_to_first_token: Optional[float] = None
     status: str = "READY"
     error_category: Optional[str] = None
+    retry_count: int = 0
     schema_validated: bool = False
     evidence_validated: bool = False
     trace_id: Optional[str] = None

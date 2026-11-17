@@ -59,6 +59,7 @@ export function connectSSE(url, { onEvent, onError, onComplete, lastEventId = nu
 
   // Listen to standard custom event types emitted by AgentOps
   const standardEvents = [
+    'progress',
     'investigation_queued',
     'investigation_started',
     'collecting_kubernetes',
@@ -72,6 +73,8 @@ export function connectSSE(url, { onEvent, onError, onComplete, lastEventId = nu
     'investigation_completed',
     'investigation_failed',
     'investigation_cancelled',
+    'lease_recovered',
+    'lease_exhausted',
   ];
 
   standardEvents.forEach((eventType) => {

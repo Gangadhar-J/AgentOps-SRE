@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import logging
 import time
 from typing import Any, Optional
@@ -50,16 +51,13 @@ class SREAgent:
 
         logger.info(f"Starting incident investigation for workload '{workload}' in namespace '{ns}'")
 
-        if progress_callback:
-            progress_callback(
-                "collecting_kubernetes",
-                f"Gathering Kubernetes pod status and warning events for '{ns}/{workload}'...",
-                {"namespace": ns, "workload": workload},
-            )
-
         with start_span("agent.investigation", attributes={"kubernetes.namespace": ns, "kubernetes.workload": workload}):
             # Step 1: Gather multi-modal evidence context via MCP
-            context, query_counts = self.orchestrator.collect_evidence(namespace=ns, workload=workload)
+            context, query_counts = self.orchestrator.collect_evidence(
+                namespace=ns,
+                workload=workload,
+                progress_callback=progress_callback,
+            )
             if incident_description:
                 context.metadata["incident_description"] = incident_description
             self.last_context = context
@@ -69,9 +67,10 @@ class SREAgent:
 
             if progress_callback:
                 progress_callback(
-                    "evidence_collection_completed",
-                    f"Evidence collection complete: {query_counts.get('k8s', 0)} k8s, {query_counts.get('prometheus', 0)} prom, {query_counts.get('loki', 0)} loki items.",
-                    {"query_counts": query_counts, "missing_signals": missing_signals},
+                    stage="evidence_collection_completed",
+                    message=f"Evidence collection complete: {query_counts.get('k8s', 0)} k8s, {query_counts.get('prometheus', 0)} prom, {query_counts.get('loki', 0)} loki items.",
+                    stage_status="completed",
+                    payload={"query_counts": query_counts, "missing_signals": missing_signals},
                 )
 
             # Check cancellation before dispatching expensive LLM inference
@@ -86,12 +85,17 @@ class SREAgent:
             schema_validated = False
             evidence_validated = False
 
+            llm_t0 = time.time()
+            llm_start_iso = datetime.now(timezone.utc).isoformat()
+            raw_m = getattr(self.llm_provider, "model_name", "configured model")
+
             if progress_callback:
-                raw_m = getattr(self.llm_provider, "model_name", "configured model")
                 progress_callback(
-                    "llm_inference_started",
-                    f"Invoking LLM reasoning engine with model '{raw_m}'...",
-                    {"model": raw_m},
+                    stage="llm_inference_started",
+                    message=f"Invoking LLM reasoning engine with model '{raw_m}'...",
+                    stage_status="running",
+                    stage_start_time=llm_start_iso,
+                    payload={"model": raw_m},
                 )
 
             with start_span("agent.llm", attributes={"investigation.id": context.investigation_id}):
@@ -101,22 +105,43 @@ class SREAgent:
                     schema_validated = True
                     evidence_validated = True
 
+                    llm_dur_ms = round((time.time() - llm_t0) * 1000.0, 2)
+                    llm_comp_iso = datetime.now(timezone.utc).isoformat()
+
                     if progress_callback:
                         progress_callback(
-                            "llm_inference_completed",
-                            f"LLM inference completed in {llm_meta.get('latency_seconds', 0)}s.",
-                            llm_meta,
+                            stage="llm_inference_completed",
+                            message=f"LLM inference completed in {llm_meta.get('latency_seconds', round(llm_dur_ms/1000, 2))}s.",
+                            stage_status="completed",
+                            stage_start_time=llm_start_iso,
+                            stage_completed_time=llm_comp_iso,
+                            duration_ms=llm_dur_ms,
+                            payload=llm_meta,
                         )
                         progress_callback(
-                            "validating_rca",
-                            "Validating RCA grounded evidence references and schema...",
-                            {"confidence": rca.confidence, "incident_type": str(rca.incident_type)},
+                            stage="validating_rca",
+                            message="Validating RCA grounded evidence references and schema...",
+                            stage_status="completed",
+                            payload={"confidence": rca.confidence, "incident_type": str(rca.incident_type)},
                         )
                 except Exception as e:
+                    llm_dur_ms = round((time.time() - llm_t0) * 1000.0, 2)
+                    llm_comp_iso = datetime.now(timezone.utc).isoformat()
                     error_msg = str(e)
                     error_cat = getattr(e, "error_category", type(e).__name__)
                     logger.error(f"Primary RCA generation failed ({error_cat}): {error_msg}")
                     errors.append(error_msg)
+
+                    if progress_callback:
+                        progress_callback(
+                            stage="llm_inference_completed",
+                            message=f"LLM inference failed ({error_cat}): {error_msg}",
+                            stage_status="failed",
+                            stage_start_time=llm_start_iso,
+                            stage_completed_time=llm_comp_iso,
+                            duration_ms=llm_dur_ms,
+                            payload={"error": error_msg, "error_category": error_cat},
+                        )
 
                     raw_p = getattr(self.llm_provider, "provider_label", None)
                     provider_name = raw_p if isinstance(raw_p, str) else "unknown"
@@ -177,6 +202,7 @@ class SREAgent:
             llm_latency_seconds=llm_meta.get("latency_seconds", 0.0),
             llm_provider=llm_meta.get("provider", "unknown"),
             llm_model=llm_meta.get("model", "unknown"),
+            retry_count=llm_meta.get("retry_count", 0),
             prompt_tokens=llm_meta.get("prompt_tokens"),
             completion_tokens=llm_meta.get("completion_tokens"),
             time_to_first_token=llm_meta.get("time_to_first_token"),

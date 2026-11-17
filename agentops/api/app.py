@@ -22,6 +22,7 @@ from agentops.worker import (
     JobStore,
     InvestigationWorker,
 )
+from agentops.observability.tracing import parse_traceparent, make_traceparent
 from evaluation.baseline import BaselineManager
 
 logger = logging.getLogger("agentops.api")
@@ -77,6 +78,7 @@ def _record_llm_execution(report: IncidentReport) -> None:
             "time_to_first_token": report.llm_runtime.time_to_first_token,
             "status": report.llm_runtime.status,
             "error_category": report.llm_runtime.error_category,
+            "retry_count": report.llm_runtime.retry_count,
             "schema_validated": report.llm_runtime.schema_validated,
             "evidence_validated": report.llm_runtime.evidence_validated,
             "trace_id": report.llm_runtime.trace_id,
@@ -542,7 +544,19 @@ def create_app(
             source = "MANUAL"
 
         idempotency_key = request.headers.get("Idempotency-Key") or payload.get("idempotency_key")
-        trace_id = request.headers.get("X-Trace-ID")
+        traceparent_hdr = request.headers.get("traceparent")
+        x_trace_id = request.headers.get("X-Trace-ID") or payload.get("trace_id")
+        traceparent = None
+        trace_id = None
+        if traceparent_hdr:
+            parsed = parse_traceparent(traceparent_hdr)
+            if parsed:
+                traceparent = traceparent_hdr
+                trace_id = parsed["trace_id"]
+        if not traceparent:
+            traceparent = make_traceparent(trace_id=x_trace_id)
+            parsed = parse_traceparent(traceparent)
+            trace_id = parsed["trace_id"] if parsed else x_trace_id
 
         try:
             namespace = validate_k8s_name(raw_ns, "namespace")
@@ -584,6 +598,7 @@ def create_app(
                 trigger_source=source,
                 idempotency_key=idempotency_key,
                 trace_id=trace_id,
+                traceparent=traceparent,
             )
         except Exception as e:
             logger.exception("Failed to enqueue investigation job")
@@ -613,6 +628,8 @@ def create_app(
             "model": job.model,
             "created_at": job.created_at,
             "is_new": is_new,
+            "trace_id": job.trace_id,
+            "traceparent": job.traceparent,
         }), 202
 
     @app.route("/api/investigations", methods=["GET"])
@@ -911,8 +928,9 @@ def create_app(
             return jsonify({"status": "error", "error": "Malformed or empty JSON payload"}), 400
 
         trace_id = request.headers.get("X-Trace-ID")
+        traceparent = request.headers.get("traceparent")
         try:
-            results = receiver.process_webhook(payload, trace_id=trace_id)
+            results = receiver.process_webhook(payload, trace_id=trace_id, traceparent=traceparent)
         except Exception as e:
             logger.exception("Error processing Alertmanager webhook")
             return jsonify({"status": "error", "error": f"Failed to persist alert event: {str(e)}"}), 500

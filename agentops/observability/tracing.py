@@ -185,3 +185,122 @@ def trace_evaluation(
         attrs["evaluation.run_id"] = run_id
     with start_span("agent.evaluation", attributes=attrs) as span:
         yield span
+
+
+def parse_traceparent(traceparent: str) -> Optional[Dict[str, str]]:
+    """
+    Parse a W3C traceparent string: 00-{trace_id}-{span_id}-{trace_flags}.
+    Returns a dict with version, trace_id, span_id, trace_flags or None if invalid.
+    """
+    if not traceparent or not isinstance(traceparent, str):
+        return None
+    parts = traceparent.strip().split("-")
+    if len(parts) != 4:
+        return None
+    version, trace_id, span_id, trace_flags = parts
+    if len(version) != 2 or len(trace_id) != 32 or len(span_id) != 16 or len(trace_flags) != 2:
+        return None
+    try:
+        int(version, 16)
+        int(trace_id, 16)
+        int(span_id, 16)
+        int(trace_flags, 16)
+    except ValueError:
+        return None
+    return {
+        "version": version,
+        "trace_id": trace_id.lower(),
+        "span_id": span_id.lower(),
+        "trace_flags": trace_flags.lower(),
+    }
+
+
+def make_traceparent(
+    trace_id: Optional[str] = None,
+    span_id: Optional[str] = None,
+    sampled: bool = True,
+) -> str:
+    """
+    Generate or format a valid W3C traceparent header string.
+    Ensures 32-hex trace_id, 16-hex span_id, and valid trace_flags.
+    """
+    import secrets
+    if trace_id:
+        clean_tid = trace_id.strip().lower()
+        if len(clean_tid) < 32:
+            clean_tid = clean_tid.zfill(32)
+        elif len(clean_tid) > 32:
+            clean_tid = clean_tid[:32]
+        try:
+            int(clean_tid, 16)
+        except ValueError:
+            clean_tid = secrets.token_hex(16)
+    else:
+        clean_tid = secrets.token_hex(16)
+
+    if span_id:
+        clean_sid = span_id.strip().lower()
+        if len(clean_sid) < 16:
+            clean_sid = clean_sid.zfill(16)
+        elif len(clean_sid) > 16:
+            clean_sid = clean_sid[:16]
+        try:
+            int(clean_sid, 16)
+        except ValueError:
+            clean_sid = secrets.token_hex(8)
+    else:
+        clean_sid = secrets.token_hex(8)
+
+    flags = "01" if sampled else "00"
+    return f"00-{clean_tid}-{clean_sid}-{flags}"
+
+
+@contextmanager
+def use_trace_context(traceparent: Optional[str] = None, tracestate: Optional[str] = None) -> Iterator[Optional[Any]]:
+    """
+    Context manager to attach a W3C trace context across boundaries (e.g. background worker threads).
+    Spans started within this context will automatically be linked as child spans with the same trace ID.
+    """
+    if not traceparent:
+        yield None
+        return
+
+    from opentelemetry.context import attach, detach
+    carrier = {"traceparent": traceparent}
+    if tracestate:
+        carrier["tracestate"] = tracestate
+
+    ctx = extract_trace_context(carrier)
+    token = attach(ctx)
+    try:
+        yield ctx
+    finally:
+        detach(token)
+
+
+def inject_trace_context(carrier: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """
+    Inject W3C trace context into a dictionary carrier (traceparent, tracestate).
+    """
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    carrier_dict = carrier if carrier is not None else {}
+    TraceContextTextMapPropagator().inject(carrier_dict)
+    return carrier_dict
+
+
+def extract_trace_context(carrier: Dict[str, str]) -> Any:
+    """
+    Extract W3C trace context from carrier dictionary.
+    """
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    return TraceContextTextMapPropagator().extract(carrier)
+
+
+def get_current_trace_id() -> Optional[str]:
+    """
+    Return active OpenTelemetry trace ID as 32-character hex string if active.
+    """
+    span = trace.get_current_span()
+    if span and span.get_span_context().is_valid:
+        return format(span.get_span_context().trace_id, "032x")
+    return None

@@ -10,6 +10,7 @@ from agentops.alerts.models import (
     AlertProcessingResult,
 )
 from agentops.config import settings
+from agentops.observability.tracing import make_traceparent, parse_traceparent
 from agentops.worker.models import JobStatus
 from agentops.worker.store import JobStore
 
@@ -76,6 +77,7 @@ class AlertmanagerReceiver:
         self,
         payload_data: Dict[str, Any],
         trace_id: Optional[str] = None,
+        traceparent: Optional[str] = None,
     ) -> List[AlertProcessingResult]:
         """
         Validate and process Alertmanager webhook payload.
@@ -92,6 +94,16 @@ class AlertmanagerReceiver:
                     message=f"Malformed Alertmanager payload schema: {str(e)}",
                 )
             ]
+
+        # Resolve W3C trace context
+        if traceparent:
+            parsed = parse_traceparent(traceparent)
+            if parsed:
+                trace_id = parsed["trace_id"]
+        if not traceparent:
+            traceparent = make_traceparent(trace_id=trace_id)
+            parsed = parse_traceparent(traceparent)
+            trace_id = parsed["trace_id"] if parsed else trace_id
 
         results: List[AlertProcessingResult] = []
 
@@ -157,6 +169,7 @@ class AlertmanagerReceiver:
                 annotations=annotations,
                 fingerprint=fingerprint,
                 trace_id=trace_id,
+                traceparent=traceparent,
             )
             results.append(dedup_result)
 
@@ -170,6 +183,7 @@ class AlertmanagerReceiver:
         annotations: Dict[str, str],
         fingerprint: Optional[str] = None,
         trace_id: Optional[str] = None,
+        traceparent: Optional[str] = None,
     ) -> AlertProcessingResult:
         """Atomically evaluate deduplication window and enqueue investigation if eligible."""
         now_dt = datetime.now(timezone.utc)
@@ -276,8 +290,8 @@ class AlertmanagerReceiver:
                 INSERT INTO investigation_jobs (
                     job_id, incident_id, status, stage, trigger_source,
                     namespace, workload, incident_description, provider,
-                    model, dry_run, created_at, trace_id
-                ) VALUES (?, ?, ?, ?, 'ALERT', ?, ?, ?, ?, ?, 0, ?, ?)
+                    model, dry_run, created_at, trace_id, traceparent
+                ) VALUES (?, ?, ?, ?, 'ALERT', ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """, (
                 job_id,
                 incident_id,
@@ -290,16 +304,18 @@ class AlertmanagerReceiver:
                 settings.LLM_MODEL,
                 now_str,
                 trace_id,
+                traceparent,
             ))
 
             cursor.execute("""
                 INSERT INTO investigation_events (
-                    job_id, event_type, stage, message, payload_json, timestamp
-                ) VALUES (?, ?, 'queued', ?, ?, ?)
+                    job_id, event_type, stage, message, stage_status, trace_id, payload_json, timestamp
+                ) VALUES (?, ?, 'queued', ?, 'running', ?, ?, ?)
             """, (
                 job_id,
                 "investigation_queued",
                 f"Investigation queued from Alertmanager webhook (Alert: {alert_name})",
+                trace_id,
                 '{"source": "ALERT"}',
                 now_str,
             ))

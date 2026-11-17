@@ -34,6 +34,7 @@ class AgentObservabilityMetrics(BaseModel):
     llm_latency_seconds: float = 0.0
     llm_provider: str = "unknown"
     llm_model: str = "unknown"
+    retry_count: int = 0
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     time_to_first_token: Optional[float] = None
